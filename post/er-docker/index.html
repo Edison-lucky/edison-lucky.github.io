@@ -1,0 +1,505 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>二 ：Docker | Y73059</title>
+<link rel="shortcut icon" href="https://edison-lucky.github.io/favicon.ico?v=1677409976014">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://edison-lucky.github.io/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="二 ：Docker | Y73059 - Atom Feed" href="https://edison-lucky.github.io/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="1、搭建配置harbor私有仓库；
+#安装harbor
+wget https://github.com/goharbor/harbor/releases/download/v2.5.2/harbor-offline-installer-v2..." />
+    <meta name="keywords" content="" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://edison-lucky.github.io">
+  <img class="avatar" src="https://edison-lucky.github.io/images/avatar.png?v=1677409976014" alt="">
+  </a>
+  <h1 class="site-title">
+    Y73059
+  </h1>
+  <p class="site-description">
+    Y73059
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="/post/about" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              二 ：Docker
+            </h2>
+            <div class="post-info">
+              <span>
+                2023-02-26
+              </span>
+              <span>
+                11 min read
+              </span>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <h2 id="1-搭建配置harbor私有仓库">1、搭建配置harbor私有仓库；</h2>
+<pre><code class="language-sh">#安装harbor
+wget https://github.com/goharbor/harbor/releases/download/v2.5.2/harbor-offline-installer-v2.5.2.tgz
+tar xf harbor-offline-installer-v2.5.2.tgz
+cd harbor 
+
+#在 freessl 网站生成证书
+
+#配置 harbor
+mkdir -p /opt/harbor/cert
+cp xxxxx.com.crt /opt/harbor/cert
+cp xxxxx.com.key /opt/harbor/cert
+
+$ cd /opt/harbor
+$ cp harbor.yml.tmpl harbor.yml
+# 修改配置文件
+$ vi harbor.yml
+...
+...
+...
+hostname: xxxxx.com
+https:
+ port: 443
+ certificate: /opt/harbor/cert/xxxxx.com.crt 
+private_key: /opt/harbor/cert/xxxxx.com.key
+external_url: https://xxxxx.com
+...
+...
+...
+#安装启动
+运行 prepare 脚本以启用 HTTPS
+./prepare
+
+#开始安装
+./install.sh
+
+#harbor的停止与启动
+$ cd harbor
+$ docker-compose stop # 停止
+$ docker-compose start # 启动(第一次需要使用 up -d)
+$ docker-compose down # 停止并删除容器（慎用）
+$ docker-compose up -d # 创建并启动
+
+
+</code></pre>
+<h2 id="2-掌握docker网络">2、掌握docker网络；</h2>
+<p>参考： <a href="https://www.cnblogs.com/liugp/p/16328904.html">Docker四种网络模式（Bridge，Host，Container，None） - 大数据老司机 - 博客园 (cnblogs.com)</a></p>
+<h3 id="bridge模式">Bridge模式</h3>
+<p>当Docker server启动时，会在主机上创建一个名为docker0的虚拟网桥，此主机上启动的Docker容器会连接到这个虚拟网桥上。虚拟网桥的工作方式和物理交换机类似，这样主机上的所有容器就通过交换机连在了一个二层网络中。<br>
+当创建一个 Docker 容器的时候，同时会创建了一对 veth pair接口（当数据包发送到一个接口时，另外一个接口也可以收到相同的数据包）。这对接口一端在容器内，即 eth0；另一端在本地并被挂载到docker0 网桥，名称以 veth 开头（例如 vethAQI2QT）。通过这种方式，主机可以跟容器通信，容器之间也可以相互通信。Docker 就创建了在主机和所有容器之间一个虚拟共享网络。</p>
+<h3 id="host模式">Host模式</h3>
+<p>相当于Vmware中的NAT模式，与宿主机在同一个网络中，但没有独立IP地址。一个Docker容器一般会分配一个独立的Network Namespace。但如果启动容器的时候使用host模式，那么这个容器将不会获得一个独立的Network Namespace，而是和宿主机共用一个Network Namespace。容器将不会虚拟出自己的网卡，配置自己的IP等，而是使用宿主机的IP和端口。可以通过 --net=host 指定使用 host 网络</p>
+<h3 id="container模式">Container模式</h3>
+<p>Docker网络container模式是指定其和已经存在的某个容器共享一个 Network Namespace，此时这两个容器共同使用同一网卡、主机名、IP 地址，容器间通讯可直接通过本地回环 lo 接口通讯。但这两个容器在其他的资源上，如文件系统、进程列表等还是隔离的。</p>
+<h3 id="none模式">None模式</h3>
+<p>容器有自己的网络命名空间，但不做任何配置，它与宿主机、与其他容器都不连通的。</p>
+<h2 id="3-安装docker-compose并利用它组装一个多容器的服务如nginx-mysql-php">3、安装docker-compose并利用它组装一个多容器的服务：如nginx、mysql、php</h2>
+<p>参考：<a href="https://www.cnblogs.com/zhijiyiyu/p/15417805.html">使用Docker Compose 搭建lnmp - 知己一语 - 博客园 (cnblogs.com)</a></p>
+<h3 id="nginx-配置">nginx 配置</h3>
+<pre><code class="language-sh">#创建项目目录 compose_nginx; 
+#创建服务子目录
+mkdir /opt/compose_nginx/
+cd /opt/compose_nginx
+mkdir nginx mysql php wwwroot
+
+#上传wordpress软件包
+cd /opt/compose_nginx/wwwroot/
+wget https://wordpress.org/wordpress-6.1.1.tar.gz
+tar xf wordpress-6.1.1.tar.gz 
+
+#上传nginx软件包
+cd nginx/
+wget http://nginx.org/download/nginx-1.22.1.tar.gz
+tar xf nginx-1.22.1.tar.gz
+
+
+#编写nginx的Dockerfile文件
+# vim Dockerfile 
+
+FROM centos:centos7.9.2009
+MAINTAINER this is nginx image &lt;Edison&gt;
+RUN yum -y install pcre-devel zlib-devel gcc gcc-c++ make
+RUN useradd -M -s /sbin/nologin nginx
+ADD nginx-1.22.1.tar.gz /usr/local/src/
+WORKDIR /usr/local/src/nginx-1.22.1
+RUN ./configure \
+--prefix=/usr/local/nginx \
+--user=nginx \
+--group=nginx \
+--with-http_stub_status_module &amp;&amp; make -j8&amp;&amp; make install
+ENV PATH /usr/local/nginx/sbin:$PATH
+RUN sed -i 's/#charset koi8-r;/charset utf-8;/' /usr/local/nginx/conf/nginx.conf \
+  &amp;&amp; sed -i '45 s/index  index.html index.htm;/index  index.html index.php;/' /usr/local/nginx/conf/nginx.conf \
+  &amp;&amp; sed -i '65,71 s/#//' /usr/local/nginx/conf/nginx.conf \
+  &amp;&amp; sed -i 's/fastcgi_pass   127.0.0.1:9000;/fastcgi_pass   172.18.0.30:9000;/' /usr/local/nginx/conf/nginx.conf \
+  &amp;&amp; sed -i 's#/scripts#/usr/local/nginx/html#' /usr/local/nginx/conf/nginx.conf
+
+EXPOSE 80
+EXPOSE 443
+ENTRYPOINT [ &quot;/usr/local/nginx/sbin/nginx&quot;, &quot;-g&quot;, &quot;daemon off;&quot; ]
+
+</code></pre>
+<h3 id="mysql-配置">MYSQL 配置</h3>
+<pre><code class="language-sh">MYSQL
+#进入mysql子目录
+cd /opt/compose_nginx/mysql/
+#将mysql包上传到此目录
+wget https://dev.mysql.com/get/Downloads/MySQL-5.7/mysql-boost-5.7.40.tar.gz
+
+
+#编写mysql的Dockerfile文件
+[root@host103 mysql]# vim Dockerfile
+FROM centos:centos7.9.2009
+MAINTAINER this is mysql image &lt;zhi&gt;
+RUN yum -y install gcc gcc-c++ ncurses ncurses-devel bison cmake make
+RUN useradd -M -s /sbin/nologin  mysql
+ADD mysql-boost-5.7.40.tar.gz /usr/local/src/
+WORKDIR /usr/local/src/mysql-boost-5.7.40/
+RUN cmake \
+-DCMAKE_INSTALL_PREFIX=/usr/local/mysql \
+-DMYSQL_UNIX_ADDR=/usr/local/mysql/mysql.sock \
+-DSYSCONFDIR=/etc \
+-DSYSTEMD_PID_DIR=/usr/local/mysql \
+-DDEFAULT_CHARSET=utf8  \
+-DDEFAULT_COLLATION=utf8_general_ci \
+-DWITH_INNOBASE_STORAGE_ENGINE=1 \
+-DWITH_ARCHIVE_STORAGE_ENGINE=1 \
+-DWITH_BLACKHOLE_STORAGE_ENGINE=1 \
+-DWITH_PERFSCHEMA_STORAGE_ENGINE=1 \
+-DMYSQL_DATADIR=/usr/local/mysql/data \
+-DWITH_BOOST=boost \
+-DWITH_SYSTEMD=1 &amp;&amp; make -j8 &amp;&amp; make install
+RUN chown -R mysql:mysql /usr/local/mysql/
+ADD my.cnf /etc/
+RUN chown mysql:mysql /etc/my.cnf
+ENV PATH /usr/local/mysql/bin:/usr/local/mysql/lib:$PATH
+WORKDIR /usr/local/mysql/
+RUN bin/mysqld \
+--initialize-insecure \
+--user=mysql \
+--basedir=/usr/local/mysql \
+--datadir=/usr/local/mysql/data
+RUN cp /usr/local/mysql/usr/lib/systemd/system/mysqld.service /usr/lib/systemd/system/
+EXPOSE 3306
+CMD /usr/local/mysql/bin/mysqld
+
+
+#配置myslq主配置文件my.cnf(用来复制到容器)
+[root@host103 mysql]# vim my.cnf 
+[client]
+port = 3306
+socket = /usr/local/mysql/mysql.sock
+
+[mysql]
+port = 3306
+socket = /usr/local/mysql/mysql.sock
+
+[mysqld]
+user = mysql
+basedir = /usr/local/mysql
+datadir = /usr/local/mysql/data
+port = 3306
+character_set_server=utf8
+pid-file = /usr/local/mysql/mysqld.pid
+socket = /usr/local/mysql/mysql.sock
+server-id = 1
+
+sql_mode=NO_ENGINE_SUBSTITUTION,STRICT_TRANS_TABLES,NO_AUTO_CREATE_USER,NO_AUTO_VALUE_ON_ZERO,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,PIPES_AS_CONCAT,ANSI_QUOTES
+
+</code></pre>
+<h3 id="php-配置">PHP 配置</h3>
+<pre><code class="language-sh">#下载php
+cd /opt/compose_nginx/php/
+wget https://www.php.net/distributions/php-8.0.26.tar.bz2
+
+#编写php的dockerfile
+[root@host103 php]# vim Dockerfile
+FROM centos:centos7.9.2009
+MAINTAINER this is php image &lt;zhi&gt;
+RUN yum -y install gd \
+libjpeg libjpeg-devel \
+libpng libpng-devel \
+freetype freetype-devel \
+libxml2 libxml2-devel \
+zlib zlib-devel \
+curl curl-devel \
+openssl openssl-devel \
+gcc gcc-c++ make pcre-devel
+RUN useradd -M -s /sbin/nologin nginx
+ADD php-8.0.26.tar.bz2 /usr/local/src/
+WORKDIR /usr/local/src/php-8.0.26
+RUN ./configure \
+--prefix=/usr/local/php \
+--with-mysql-sock=/usr/local/mysql/mysql.sock \
+--with-mysqli \
+--with-zlib \
+--with-curl \
+--with-gd \
+--with-jpeg-dir \
+--with-png-dir \
+--with-freetype-dir \
+--with-openssl \
+--enable-fpm \
+--enable-mbstring \
+--enable-xml \
+--enable-session \
+--enable-ftp \
+--enable-pdo \
+--enable-tokenizer \
+--enable-zip &amp;&amp; make &amp;&amp; make install
+ENV PATH /usr/local/php/bin:/usr/local/php/sbin:$PATH
+
+
+RUN \cp  /usr/local/src/php-8.0.26/php.ini-development /usr/local/php/lib/php.ini \  &amp;&amp; sed -i 's#mysqli.default_socket =#mysqli.default_socket = /usr/local/mysql/mysql.sock#' /usr/local/php/lib/php.ini \  &amp;&amp; sed -i '939 s#;date.timezone =#date.timezone = Asia/Shanghai#' /usr/local/php/lib/php.ini
+
+RUN \cp /usr/local/php/etc/php-fpm.conf.default  /usr/local/php/etc/php-fpm.conf \
+  &amp;&amp; sed -i '17 s/^;//' /usr/local/php/etc/php-fpm.conf
+
+RUN \cp /usr/local/php/etc/php-fpm.d/www.conf.default /usr/local/php/etc/php-fpm.d/www.conf \
+  &amp;&amp; sed -i 's#user = nobody#user = nginx#' /usr/local/php/etc/php-fpm.d/www.conf \
+  &amp;&amp; sed -i 's#group = nobody#group = nginx#' /usr/local/php/etc/php-fpm.d/www.conf \  &amp;&amp; sed -i 's#listen = 127.0.0.1:9000#listen = 172.18.0.30:9000#' /usr/local/php/etc/php-fpm.d/www.conf
+
+EXPOSE 9000
+ENTRYPOINT [ &quot;/usr/local/php/sbin/php-fpm&quot;, &quot;-F&quot; ]
+
+
+</code></pre>
+<h3 id="docker-compose">Docker-compose</h3>
+<pre><code class="language-sh">Docker-compose
+
+#先拉取镜像centos 7
+docker pull centos:centos7.9.2009
+
+
+# vim /opt/compose_nginx/docker-compose.yml
+#使用版本2（3版本不支持指令volumes_from)
+version: '2'
+services:
+  #配置nginx服务
+  nginx:
+    #设置主机名为nginx
+    hostname: nginx
+    #使用dockerfile创建镜像。Dockerfile文件在当前目录的nginx目录下，文件名为Dockerfile
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    #容器名为nginx
+    container_name: nginx
+    #暴露端口80和443
+    ports:
+      - 80:80
+      - 443:443
+    #加入到lnmp网络中，使用ip172.18.0.0.10
+    networks:
+      lnmp:
+        ipv4_address: 172.18.0.10
+    #将当前目录的wwwroot目录挂载到容器的/usr/local/nginx/html
+    volumes:
+      - ./wwwroot/:/usr/local/nginx/html
+  #配置服务mysql
+  mysql:
+    hostname: mysql
+    build:
+      context: ./mysql
+      dockerfile: Dockerfile
+    container_name: mysql
+    ports:
+      - 3306:3306
+    networks:
+      lnmp:
+        ipv4_address: 172.18.0.20
+    #设置/usr/local/mysql为数据卷
+    volumes:
+      - /usr/local/mysql
+  #配置服务php    
+  php:
+    hostname: php
+    build:
+      context: ./php
+      dockerfile: Dockerfile
+    container_name: php
+    ports:
+      - 9000:9000
+    networks:
+      lnmp:
+        ipv4_address: 172.18.0.30
+    #从nginx容器和mysql容器获取数据卷    
+    volumes_from:
+      - nginx
+      - mysql
+    #php容器需要在nginx和mysql之后启动  
+    depends_on:
+      - nginx
+      - mysql
+    #php和容器nginx，容器mysql连接   
+    links:
+      - nginx
+      - mysql
+#配置网络模式和网络名      
+networks:
+  #设置网络名lnmp
+  lnmp:
+    #网络模式为bridge桥接莫斯
+    driver: bridge
+    ipam:
+      config:
+        #使用的网段为172.18.0.0/16
+        - subnet: 172.18.0.0/16
+
+#在工作目录使用此命令。
+#-f： --file-name, 指定模板文件。默认为docker-compose.yml
+#-p: --project-name NAME ，指定项目名称，默认使用目录名
+#-d： 在后台运行
+docker-compose -f docker-compose.yml up -d
+
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li><a href="#1-%E6%90%AD%E5%BB%BA%E9%85%8D%E7%BD%AEharbor%E7%A7%81%E6%9C%89%E4%BB%93%E5%BA%93">1、搭建配置harbor私有仓库；</a></li>
+<li><a href="#2-%E6%8E%8C%E6%8F%A1docker%E7%BD%91%E7%BB%9C">2、掌握docker网络；</a>
+<ul>
+<li><a href="#bridge%E6%A8%A1%E5%BC%8F">Bridge模式</a></li>
+<li><a href="#host%E6%A8%A1%E5%BC%8F">Host模式</a></li>
+<li><a href="#container%E6%A8%A1%E5%BC%8F">Container模式</a></li>
+<li><a href="#none%E6%A8%A1%E5%BC%8F">None模式</a></li>
+</ul>
+</li>
+<li><a href="#3-%E5%AE%89%E8%A3%85docker-compose%E5%B9%B6%E5%88%A9%E7%94%A8%E5%AE%83%E7%BB%84%E8%A3%85%E4%B8%80%E4%B8%AA%E5%A4%9A%E5%AE%B9%E5%99%A8%E7%9A%84%E6%9C%8D%E5%8A%A1%E5%A6%82nginx-mysql-php">3、安装docker-compose并利用它组装一个多容器的服务：如nginx、mysql、php</a>
+<ul>
+<li><a href="#nginx-%E9%85%8D%E7%BD%AE">nginx 配置</a></li>
+<li><a href="#mysql-%E9%85%8D%E7%BD%AE">MYSQL 配置</a></li>
+<li><a href="#php-%E9%85%8D%E7%BD%AE">PHP 配置</a></li>
+<li><a href="#docker-compose">Docker-compose</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://edison-lucky.github.io/post/yi-docker/">
+              <h3 class="post-title">
+                一 ：Docker
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="edison-lucky.github.io" target="_blank">Y73059</a>
+  <a class="rss" href="https://edison-lucky.github.io/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

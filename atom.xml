@@ -1,0 +1,1524 @@
+<?xml version="1.0" encoding="utf-8"?>
+<feed xmlns="http://www.w3.org/2005/Atom">
+    <id>https://edison-lucky.github.io</id>
+    <title>Y73059</title>
+    <updated>2023-02-26T11:13:13.891Z</updated>
+    <generator>https://github.com/jpmonette/feed</generator>
+    <link rel="alternate" href="https://edison-lucky.github.io"/>
+    <link rel="self" href="https://edison-lucky.github.io/atom.xml"/>
+    <subtitle>Y73059</subtitle>
+    <logo>https://edison-lucky.github.io/images/avatar.png</logo>
+    <icon>https://edison-lucky.github.io/favicon.ico</icon>
+    <rights>All rights reserved 2023, Y73059</rights>
+    <entry>
+        <title type="html"><![CDATA[五 - K8S]]></title>
+        <id>https://edison-lucky.github.io/post/wu-k8s/</id>
+        <link href="https://edison-lucky.github.io/post/wu-k8s/">
+        </link>
+        <updated>2023-02-26T11:12:13.000Z</updated>
+        <content type="html"><![CDATA[<h2 id="1实现基于velero对etcd的单独namespace的备份和恢复">1.实现基于velero对etcd的单独namespace的备份和恢复</h2>
+<ol>
+<li>
+<p>先安装minio</p>
+<pre><code class="language-sh">docker run -d -p 9000:9000 -p 9090:9090 --name minio1 \
+  -e &quot;MINIO_ROOT_USER=admin&quot; \
+  -e &quot;MINIO_ROOT_PASSWORD=12345678&quot; \
+  -v /mnt/data:/data \
+  --restart=always \
+  minio/minio server /data --console-address ':9090'
+  
+
+访问页minio 创建bucket 名称为 velerodata
+http://192.168.25.229:9090/
+</code></pre>
+</li>
+<li>
+<p>部署 velero</p>
+<pre><code class="language-sh">#在master节点部署 velero
+mkdir -p /data/velero
+
+# 访问minio的认证文件，minio用户名与配置
+cat &gt;&gt; velero-auth.txt &lt;&lt;EOF
+[default]
+aws_access_key_id = admin
+aws_secret_access_key = 12345678
+EOF
+ 
+# 准备user-csr文件，用于访问k8s；也可直接使用/root/.kube/config文件
+cat &gt;&gt;awsuser-csr.json &lt;&lt;EOF
+{
+  &quot;CN&quot;: &quot;awsuser&quot;,
+  &quot;hosts&quot;: [],
+  &quot;key&quot;: {
+    &quot;algo&quot;: &quot;rsa&quot;,
+    &quot;size&quot;: 2048
+  },
+  &quot;names&quot;: [
+    {
+      &quot;C&quot;: &quot;CN&quot;,
+      &quot;ST&quot;: &quot;BeiJing&quot;,
+      &quot;L&quot;: &quot;BeiJing&quot;,
+      &quot;O&quot;: &quot;k8s&quot;,
+      &quot;OU&quot;: &quot;System&quot;
+    }
+  ]
+}
+EOF
+
+wget https://github.com/vmware-tanzu/velero/releases/download/v1.8.1/velero-v1.8.1-linux-amd64.tar.gz
+tar xvf velero-v1.8.1-linux-amd64.tar.gz 
+cp velero-v1.8.1-linux-amd64/velero  /usr/local/bin/
+velero --help
+
+wget https://github.com/cloudflare/cfssl/releases/download/v1.6.1/cfssl_1.6.1_linux_amd64 
+wget https://github.com/cloudflare/cfssl/releases/download/v1.6.1/cfssljson_1.6.1_linux_amd64 
+wget https://github.com/cloudflare/cfssl/releases/download/v1.6.1/cfssl-certinfo_1.6.1_linux_amd64
+
+mv cfssl-certinfo_1.6.1_linux_amd64 cfssl-certinfo
+mv cfssl_1.6.1_linux_amd64 cfssl
+mv cfssljson_1.6.1_linux_amd64 cfssljson
+cp cfssl-certinfo cfssl cfssljson /usr/local/bin/
+chmod a+x /usr/local/bin/cfssl* 
+
+</code></pre>
+</li>
+<li>
+<p>签发证书</p>
+<pre><code class="language-sh">cd /data/velero
+# 从部署deploy服务器复制ca-config.json文件
+scp 192.168.25.229:/etc/kubeasz/clusters/k8s-cluster1/ssl/ca-config.json /data/velero/ca-config.json
+ 
+# 执行证书签发
+/usr/local/bin/cfssl gencert \
+-ca=/etc/kubernetes/ssl/ca.pem \
+-ca-key=/etc/kubernetes/ssl/ca-key.pem \
+-config=./ca-config.json \
+-profile=kubernetes \
+./awsuser-csr.json | cfssljson -bare awsuser
+
+</code></pre>
+</li>
+<li>
+<p>配置客户端认证</p>
+<pre><code class="language-sh">#分发证书到api-server证书路径
+cp awsuser-key.pem /etc/kubernetes/ssl/
+cp awsuser.pem /etc/kubernetes/ssl/
+ 
+#生成集群认证config文件
+export KUBE_APISERVER=&quot;https://192.168.25.230:6443&quot;
+kubectl config set-cluster kubernetes \
+--certificate-authority=/etc/kubernetes/ssl/ca.pem \
+--embed-certs=true \
+--server=${KUBE_APISERVER} \
+--kubeconfig=./awsuser.kubeconfig
+ 
+ 
+#设置客户端证书认证
+kubectl config set-credentials awsuser \
+--client-certificate=/etc/kubernetes/ssl/awsuser.pem \
+--client-key=/etc/kubernetes/ssl/awsuser-key.pem \
+--embed-certs=true \
+--kubeconfig=./awsuser.kubeconfig
+ 
+#设置上下文参数
+kubectl config set-context kubernetes \
+--cluster=kubernetes \
+--user=awsuser \
+--namespace=velero-system \
+--kubeconfig=./awsuser.kubeconfig
+ 
+#设置默认上下文
+kubectl config use-context kubernetes --kubeconfig=awsuser.kubeconfig
+
+查看awsuser.kubeconfig​文件
+</code></pre>
+</li>
+<li>
+<p>创建用户</p>
+<pre><code class="language-sh">#k8s集群中创建awsuser账户
+kubectl create clusterrolebinding awsuser --clusterrole=cluster-admin --user=awsuser
+
+#创建namespace
+kubectl create ns velero-system
+</code></pre>
+</li>
+<li>
+<p>安装velero</p>
+<pre><code class="language-sh"># 执行安装
+velero --kubeconfig  ./awsuser.kubeconfig \	#连接k8s认证文件
+install \					#安装
+--provider aws \				#连接k8s用户
+--plugins velero/velero-plugin-for-aws:v1.3.1 \	#velero镜像
+--bucket velerodata  \				#minio bucket名称
+--secret-file ./velero-auth.txt \		#连接minio认证文件
+--use-volume-snapshots=false \			#是否使用快照
+--namespace velero-system \			#namespace名称
+--backup-location-config region=minio,s3ForcePathStyle=&quot;true&quot;,s3Url=http://192.168.25.229:9000	#minio地址
+ 
+ velero --kubeconfig  ./awsuser.kubeconfig \
+install \
+--provider aws \
+--plugins velero/velero-plugin-for-aws:v1.3.1 \
+--bucket velerodata  \
+--secret-file ./velero-auth.txt \
+--use-volume-snapshots=false \
+--namespace velero-system \
+--backup-location-config region=minio,s3ForcePathStyle=&quot;true&quot;,s3Url=http://192.168.25.229:9000
+ 
+ 查看
+ kubectl get pod -n velero-system
+ 
+ 确保日志没有报错
+ kubectl logs velero-54d99f4c8d-rvf2f -n velero-system
+ velero backup describe myserver4-ns-backup-20230223070730 -n velero-system
+</code></pre>
+</li>
+<li>
+<p>备份</p>
+<pre><code class="language-sh">#新创建myserver 名称空间 和pod 测试用
+# 按当前日前对myserver namespace进行备份
+DATE=`date +%Y%m%d%H%M%S`
+ 
+#备份指定名称空间
+velero backup create myserver-ns-backup-${DATE} \
+--include-namespaces myserver \
+--kubeconfig=/data/velero/awsuser.kubeconfig \
+--namespace velero-system
+
+#备份指定pod
+velero backup create pod-backup-01 \
+--include-cluster-resources=true \
+--ordered-resources 'pods=myserver/test-pod' \
+--namespace velero-system \
+--include-namespaces=myserver
+
+#批量备份所有namespace
+#!/bin/bash
+DATE=`date +%Y%m%d%H%M%S`
+NS_NAME=`kubectl get ns|awk 'NR&gt;1{print $1}'`
+for NAME in ${NS_NAME};do
+	velero backup create ${NAME}-ns-backup-${DATE} \
+--include-namespaces ${NAME} \
+--kubeconfig=/data/velero/awsuser.kubeconfig \
+--namespace velero-system
+done
+</code></pre>
+</li>
+<li>
+<p>恢复</p>
+<pre><code class="language-sh">#测试删除
+kubectl delete pod test-pod -n myserver
+
+#执行恢复
+velero restore create --from-backup myserver4-ns-backup-20230223070730 --wait \
+--kubeconfig=/data/velero/awsuser.kubeconfig \
+--namespace velero-system
+</code></pre>
+</li>
+</ol>
+<h2 id="2掌握k8s中常见的资源对象的使用">2.掌握k8s中常见的资源对象的使用：</h2>
+<h2 id="deployment">deployment</h2>
+<pre><code class="language-sh">apiVersion: apps/v1 # API群组及版本
+kind: Deployment # 资源类型特有标识
+metadata:
+ name &lt;string&gt; # 资源名称，在作用域中要唯一
+ namespace &lt;string&gt; # 名称空间；Deployment隶属名称空间级别
+spec:
+ minReadySeconds &lt;integer&gt; # Pod就绪后多少秒内任一容器无crash方可视为“就绪”
+ replicas &lt;integer&gt; # 期望的Pod副本数，默认为1
+ selector &lt;object&gt; # 标签选择器，必须匹配template字段中Pod模板中的标签
+ template &lt;object&gt; # Pod模板对象
+
+ revisionHistoryLimit &lt;integer&gt; # 滚动更新历史记录数量，默认为10
+ strategy &lt;Object&gt; # 滚动更新策略
+ type &lt;string&gt; # 滚动更新类型，可用值有Recreate和RollingUpdate；
+ rollingUpdate &lt;Object&gt; # 滚动更新参数，专用于RollingUpdate类型
+ maxSurge &lt;string&gt; # 更新期间可比期望的Pod数量多出的数量或比例；
+ maxUnavailable &lt;string&gt; # 更新期间可比期望的Pod数量缺少的数量或比例，10， 
+progressDeadlineSeconds &lt;integer&gt; # 滚动更新故障超时时长，默认为600秒
+ paused &lt;boolean&gt; # 是否暂停部署过程
+</code></pre>
+<h2 id="service">service</h2>
+<p>Service代理模式：<br>
+kube-proxy如何确保service能正常工作；<br>
+Userspace<br>
+iptables<br>
+ipvs</p>
+<p>Service的类型<br>
+ClusterIP：通过集群内部IP地址暴露服务，但该地址仅在集群内部可见、可达，它无法被集群外部的客户端访问；默认类型；<br>
+NodePort：NodePort是ClusterIP的增强类型，它会于ClusterIP的功能之外，在每个节点上使用一个相同的端口号将外部流量引入到该Service上来。<br>
+LoadBalancer：LB是NodePort的增强类型，要借助于底层IaaS云服务上的LBaaS产品来按需管理LoadBalancer。<br>
+ExternalName：借助集群上KubeDNS来实现，服务的名称会被解析为一个CNAME记录，而CNAME名称会被DNS解析为集群外部的服务的IP地址； 这种Service既不会有ClusterIP，也不会有NodePort；</p>
+<p>ClusterIP：建议由K8S动态指定一个； 也支持用户手动明确指定；<br>
+ServicePort：被映射进Pod上的应用程序监听的端口； 而且如果后端Pod有多个端口，并且每个端口都想通过SErvice暴露的话，每个都要单独定义。<br>
+最终接收请求的是PodIP和containerPort；</p>
+<pre><code class="language-sh">#Service资源的定义格式，名称空间级别的资源：
+apiVersion: v1
+kind: Service
+metadata:
+  name: …
+  namespace: …
+  labels:
+    key1: value1
+    key2: value2
+spec:
+  type &lt;string&gt;   # Service类型，默认为ClusterIP
+  selector &lt;map[string]string&gt;  # 等值类型的标签选择器，内含“与”逻辑
+  ports：  # Service的端口对象列表
+  - name &lt;string&gt;  # 端口名称
+    protocol &lt;string&gt;  # 协议，目前仅支持TCP、UDP和SCTP，默认为TCP
+    port &lt;integer&gt;  # Service的端口号
+    targetPort  &lt;string&gt;  # 后端目标进程的端口号或名称，名称需由Pod规范定义
+    nodePort &lt;integer&gt;  # 节点端口号，仅适用于NodePort和LoadBalancer类型
+  clusterIP  &lt;string&gt;  # Service的集群IP，建议由系统自动分配
+  externalTrafficPolicy  &lt;string&gt; # 外部流量策略处理方式，Local表示由当前节点处理，Cluster表示向集群范围调度
+  loadBalancerIP  &lt;string&gt;  # 外部负载均衡器使用的IP地址，仅适用于LoadBlancer
+  externalName &lt;string&gt;  # 外部服务名称，该名称将作为Service的DNS CNAME值
+</code></pre>
+<h2 id="configmap">configmap</h2>
+<p>创建configmap</p>
+<pre><code class="language-sh">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configmap-test
+data:
+  # 类属性键；每一个键都映射到一个简单的值
+  property_1: Hello
+  property_2: World
+</code></pre>
+<p>在Volume中引用ConfigMap</p>
+<pre><code class="language-sh">apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-volume
+spec:
+  containers:
+  - image: nginx:1.16.1
+    name: container-0
+    resources:
+      limits:
+        cpu: 100m
+        memory: 200Mi
+      requests:
+        cpu: 100m
+        memory: 200Mi
+    volumeMounts:
+    - name: vol-configmap		# 挂载名为vol-configmap的Volume
+      mountPath: &quot;/tmp&quot;
+  imagePullSecrets:
+  - name: default-secret
+  volumes:
+  # 你可以在 Pod 级别设置卷，然后将其挂载到 Pod 内的容器中
+  - name: vol-configmap
+    configMap:				# 引用ConfigMap
+      # 提供想要挂载的 ConfigMap 的名字
+      name: configmap-test
+      # 来自 ConfigMap 的一组键，将被创建为文件，如果不配置items，则 ConfigMap 中的每个键都会变成一个与该键同名的文件。path为挂载点名称，key为文件内容
+      items:
+      - key: property_1
+        path: p1
+      - key: property_2
+        path: p2
+
+</code></pre>
+<h2 id="secret">secret</h2>
+<p>Secret资源，使用环境变量</p>
+<pre><code class="language-sh">containers:
+- name: …
+  image: …
+  env:
+  - name: &lt;string&gt;       # 变量名，其值来自于某Secret对象上的指定键的值；
+    valueFrom:            # 键值引用； 
+      secretKeyRef:       
+        name: &lt;string&gt;    # 引用的Secret对象的名称，需要与该Pod位于同一名称空间；
+        key: &lt;string&gt;     # 引用的Secret对象上的键，其值将传递给环境变量；
+        optional: &lt;boolean&gt; # 是否为可选引用；
+  envFrom:                 # 整体引用指定的Secret对象的全部键名和键值；
+  - prefix: &lt;string&gt;     # 将所有键名引用为环境变量时统一添加的前缀；
+secretRef:        
+  name: &lt;string&gt;     # 引用的Secret对象名称；
+  optional: &lt;boolean&gt; # 是否为可选引用；
+</code></pre>
+<h2 id="3掌握基于nfs实现pod数据持久化的使用方式测试emptydir-hostpath的使用">3.掌握基于NFS实现pod数据持久化的使用方式，测试emptyDir、hostPath的使用</h2>
+<h3 id="nfs-dynamic">NFS  - Dynamic</h3>
+<pre><code class="language-sh">#nfs server 安装
+
+yum install nfs-utils
+systemctl enable rpcbind
+systemctl enable nfs
+systemctl start rpcbind
+systemctl start nfs
+
+mkdir /data
+chmod 755 /data
+
+#配置共享目录
+vi /etc/exports
+/data/     192.168.0.0/24(rw,sync,no_root_squash,no_all_squash)
+
+
+#在集群的其中一台服务器helm 后，使用operator 的方式安装
+#添加helm源
+helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
+
+#创建个namespace(可选，主要是为了查看资源方便)
+kubectl create ns nfs-sc-default
+
+#使用helm安装(10.1.129.86为NFS地址，/data/nfs-data为共享的目录)
+helm install nfs-subdir-external-provisioner nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
+    --set storageClass.name=nfs-sc-default	#指定sc的名字
+    --set nfs.server=10.1.129.86 \					#指定nfs地址
+    --set nfs.path=/data/nfs-data \					#指定nfs的共享目录
+    --set storageClass.defaultClass=true \	#指定为默认sc
+    -n nfs-sc-default												#指定命名空间
+
+#查看创建的sc
+kubectl get sc
+
+</code></pre>
+<h3 id="emptydir">emptyDir</h3>
+<p>当 Pod 因为某些原因被从节点上删除时，emptyDir 卷中的数据也会被永久删除。</p>
+<pre><code class="language-sh">apiVersion: v1
+kind: Pod
+metadata:
+  name: emptydir-pd
+spec:
+  containers:
+  - image: nginx:1.16.1
+    name: test-container
+    volumeMounts:
+    - mountPath: /cache
+      name: cache-volume
+  volumes:
+  - name: cache-volume
+    emptyDir:
+      sizeLimit: 100Mi
+	  
+# 进入容器创建emptpydir-test文件
+kubectl exec -it emptydir-pd bash
+echo 'emptydir-pod' &gt;&gt; /cache/emptpydir-test	   
+
+# 进入宿主机，查看emptpydir-test文件内容
+find / -name emptpydir-test
+</code></pre>
+<h3 id="hostpath">hostPath</h3>
+<pre><code class="language-sh">apiVersion: v1
+kind: Pod
+metadata:
+  name: hostpath-pd
+spec:
+  containers:
+  - image: nginx:1.16.1
+    name: test-container
+    volumeMounts:
+    - mountPath: /hostpath-pd
+      name: hostpath-volume
+  volumes:
+  - name: hostpath-volume
+    hostPath:
+      path: /data
+	  
+# 进入容器，创建hostpath-test文件
+kubectl exec -it hostpath-pd bash
+echo 'hostpath' &gt;&gt; /hostpath-pd/hostpath-test
+
+# 进入宿主机，查看hostpath-test文件内容
+cat /data/hostpath-test 
+</code></pre>
+<h2 id="4实现基于secret实现nginx的tls认证-并实现私有仓库镜像的下载认证">4.实现基于Secret实现nginx的tls认证、并实现私有仓库镜像的下载认证</h2>
+<ol>
+<li>
+<p>tls认证 secret</p>
+<pre><code class="language-sh">#创建证书
+mkdir -p /data/certs
+
+cd /data/certs
+openssl req -x509 -sha256 -newkey rsa:4096 -keyout ca.key -out ca.crt -days 3560 -nodes -subj '/CN=www.ca.com'
+openssl req -new -newkey rsa:4096 -keyout server.key -out server.csr -nodes -subj '/CN=www.mysite.com'
+openssl x509 -req -sha256 -days 3650 -in server.csr -CA ca.crt -CAkey ca.key -set_serial 01 -out server.crt
+
+# 创建secret
+kubectl create secret tls myserver-tls-key --cert=./server.crt --key=./server.key -n myserver
+
+#查看
+kubectl get secret -n myserver
+kubectl describe secret myserver-tls-key -n myserver
+</code></pre>
+<ol start="2">
+<li>私有仓库sercet</li>
+</ol>
+</li>
+</ol>
+<pre><code class="language-sh">#在docker hub创建使用账号，使用docker认证文件创建 
+#推动镜像到 dockerhub 仓库名为 edison626/nginx-test:1.20.1
+# 登录私有仓库，登录成功后，认证信息保存至/root/.docker/config.json文件
+docker login #docker hub 账号
+
+# 创建secret
+kubectl create secret generic dockerhub-registry-image-pull-key \
+--from-file=.dockerconfigjson=/root/.docker/config.json \
+--type=kubernetes.io/dockerconfigjson \
+-n myserver
+
+</code></pre>
+<ol start="3">
+<li>
+<h4 id="生成yaml-并运行">生成yaml 并运行</h4>
+</li>
+</ol>
+<pre><code class="language-sh">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: myserver
+data:
+  default: |
+    server {
+      listen  80;
+      listen  443 ssl;
+      server_name     www.mysite.com;
+      ssl_certificate         /etc/nginx/conf.d/certs/tls.crt;
+      ssl_certificate_key     /etc/nginx/conf.d/certs/tls.key;
+      location / {
+          root  /usr/share/nginx/html;
+          index index.html index.htm;
+          if ($scheme = http) {
+              rewrite / https://www.mysite.com permanent;
+          }
+          #if (-e $request_filename) {
+          #    rewrite ^/(.*) /index.html last;
+          #}
+      }
+    }
+ 
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myserver-nginx-deploy
+  namespace: myserver
+  labels:
+    app: myserver-nginx-deploy
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myserver-nginx
+  template:
+    metadata:
+      labels:
+        app: myserver-nginx
+    spec:
+      containers:
+      - name: myserver-nginx
+        image: edison626/nginx-test:1.20.1 #dockerhub 私有仓库
+        ports:
+          - containerPort: 80
+        volumeMounts:
+          - name: nginx-config
+            mountPath: /etc/nginx/conf.d
+          - name: myserver-tls-key                 #在容器里配置证书文件
+            mountPath: /etc/nginx/conf.d/certs     #证书路径
+      volumes:
+      - name: nginx-config	
+        configMap:
+          name: nginx-config
+          items:
+            - key: default		
+              path: mysite.conf	
+      - name: myserver-tls-key
+        secret:	
+          secretName: myserver-tls-key	#证书秘钥
+      imagePullSecrets:
+        - name: dockerhub-registry-image-pull-key  #dockerhub secret 秘钥		   
+ 
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nmyserver-nginx-service
+  namespace: myserver
+spec:
+  type: NodePort
+  selector:
+    app: myserver-nginx
+  ports:
+    - name: http		
+      protocol: TCP		
+      port: 80				
+      targetPort: 80		
+      nodePort: 30019		
+    - name: https	
+      protocol: TCP
+      port: 443
+      targetPort: 443
+      nodePort: 30020
+	  
+#检查
+- 镜像是否能正常拉取
+- 访问端口30020 查看证书状态
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[四 - K8S]]></title>
+        <id>https://edison-lucky.github.io/post/si-k8s/</id>
+        <link href="https://edison-lucky.github.io/post/si-k8s/">
+        </link>
+        <updated>2023-02-26T11:11:37.000Z</updated>
+        <content type="html"><![CDATA[<h2 id="1kubernetes高可用集群二进制部署">1.kubernetes高可用集群二进制部署</h2>
+<h2 id="升级kubernetes">升级kubernetes</h2>
+<h3 id="server">server</h3>
+<pre><code class="language-sh">#server 包
+https://dl.k8s.io/v1.26.1/kubernetes-server-linux-amd64.tar.gz
+#在master 节点下载后解压
+
+#查看版本
+/opt/kube/bin/kube-apiserver --version
+
+scp kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl 
+
+#先把这6个服务停了
+systemctl stop kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl 
+
+cd /root/upgrade_k8s/kubernetes/server/bin #进入到解压目录上，复制二进制文件并k8s目录上覆盖
+cp kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl /opt/kube/bin/
+
+#启动
+systemctl start kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl 
+
+
+#更新到deploy 服务器
+systemctl stop kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl 
+cd /root/upgrade_k8s/kubernetes/server/bin
+scp kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl root@192.168.25.229:/etc/kubeasz/bin/
+systemctl start kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl 
+
+</code></pre>
+<h3 id="node">node</h3>
+<pre><code class="language-sh">#node 包
+https://dl.k8s.io/v1.26.1/kubernetes-node-linux-amd64.tar.gz
+
+#如果在生产环境需要先驱逐pods
+kubectl drain #命名比较暴力
+kubectl condon #禁调用
+kubectl uncordon 服务器IP 
+
+systemctl stop kube-proxy kubelet
+
+#进入到解压目录上，复制二进制文件并k8s目录上覆盖
+scp kube-proxy kubelet kubectl root@192.168.25.231:/opt/kube/bin/
+scp kube-proxy kubelet kubectl root@192.168.25.232:/opt/kube/bin/
+
+systemctl start kube-proxy kubelet
+</code></pre>
+<h2 id="升级containerd">升级containerd</h2>
+<p>升级从 1.6.8 升级到 1.6.9 版本</p>
+<pre><code class="language-sh">#下载
+wget https://github.com/containerd/containerd/releases/download/v1.6.9/containerd-1.6.9-linux-amd64.tar.gz
+
+先把进程给杀掉-才能传送代码
+kill -9 $(ps -ef|grep containerd-shim-runc-v2|gawk '$0 !~/grep/ {print $2}' |tr -s '\n' ' ')
+systemctl stop containerd
+
+在解压的目录下执行scp 并覆盖
+scp * root@192.168.25.232:/opt/kube/bin/
+scp * root@192.168.25.231:/opt/kube/bin/
+scp * root@192.168.25.230:/opt/kube/bin/
+
+systemctl start containerd
+
+重启服务器
+</code></pre>
+<h2 id="横向扩容-添加master">横向扩容 - 添加master</h2>
+<pre><code class="language-sh">#新的服务器先做配置
+#在新服务器执行
+ln -s /usr/bin/python3 /usr/bin/python
+
+#在deploy 执行
+ssh-copy-id 192.168.25.233
+
+#查看命令
+./ezctl --help
+
+#添加
+./ezctl add-master k8s-cluster1 192.168.25.233
+
+#删除
+./ezctl del-master k8s-cluster1 192.168.25.233
+</code></pre>
+<h2 id="横向扩容-添加node">横向扩容 -添加node</h2>
+<pre><code class="language-sh">#添加
+./ezctl add-node k8s-cluster1 192.168.25.233
+
+#删除
+./ezctl del-node k8s-cluster1 192.168.25.233
+</code></pre>
+<h2 id="2-etcd的备份和恢复-基于快照">2. etcd的备份和恢复-基于快照</h2>
+<pre><code class="language-sh">#etcd 常用命令 
+#查看etcd 有哪些服务器
+etcdctl --write-out=table member list
+
+#查看etcd leader
+etcdctl --write-out=table endpoint status
+
+#备份 -  cat /etc/kubeasz/playbooks/94.backup.yml
+#恢复 -  cat /etc/kubeasz/playbooks/95.restore.yml
+#恢复的操作 - cat /etc/kubeasz/roles/cluster-restore/task/main.yaml
+
+#基于kubeasz 做备份
+./ezctl backup k8s-cluster1
+#备份路径
+ll /etc/kubeasz/clusters/k8s-cluster1/backup
+
+
+#使用md5sum 确认 snapshot.db 和要恢复的版本是一直的
+root@ubtdeploy:/etc/kubeasz/clusters/k8s-cluster1/backup# md5sum snapshot.db
+b1855c78618bd1c5089a5cdd03ee4885  snapshot.db
+root@ubtdeploy:/etc/kubeasz/clusters/k8s-cluster1/backup# md5sum snapshot_202302221042.db
+b1855c78618bd1c5089a5cdd03ee4885  snapshot_202302221042.db
+
+#如果不一直可以强制覆盖-复制覆盖再恢复
+cp -rf snapshot_202302221107.db snapshot.db
+
+#再执行etcd恢复
+./ezctl restore k8s-cluster1
+</code></pre>
+<h2 id="3-整理coredns的域名解析流程和corefile配置">3. 整理coredns的域名解析流程和Corefile配置</h2>
+<p>1.容器nginx需要访问百度，ping一下百度域名baidu.com。<br>
+2.该请求会先被kube-dns(Coredns服务)捕获。<br>
+3.域名解析转发到coredns集群，根据负载均衡会分配到某个coredns pod。<br>
+4.coredns pod再通过api-server转到k8s集群服务。<br>
+5.最后k8s集群从etcd数据库中获取到域名解析结果。<br>
+6.etcd把结果原路返回到k8s，依次类推，Nginx获取到baidu对应的IP地址。<br>
+7.解析结果会保存到域名缓存，下次访问会更加快速。</p>
+<h3 id="corefile配置">Corefile配置</h3>
+<p>https://github.com/coredns/deployment/blob/master/kubernetes/coredns.yaml.sed</p>
+<pre><code class="language-sh">#修改 CLUSTER_DOMAIN - 第62行 
+kubernetes magedu.local in-addr.arpa ip6.arpa {
+
+#指定互联网服务器，最大可连接数可扩张 - 第67行
+forward . 8.8.8.8 {
+  max_concurent 2000
+} 
+
+#修改 cluster IP - 第191行
+clusterIP: CLUSTER_DNS_IP
+</code></pre>
+<h2 id="4dashboard的使用">4.dashboard的使用</h2>
+<p>参考： https://jimmysong.io/kubernetes-handbook/guide/auth-with-kubeconfig-or-token.html</p>
+<pre><code class="language-sh">#在官网获取的命令
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+
+#创建SA
+$ kubectl create serviceaccount dashboard-admin -n kubernetes-dashboard
+
+
+$ kubectl create clusterrolebinding dashboard-cluster-admin --clusterrole=cluster-admin --serviceaccount=kubernetes-dashboard:dashboard-admin
+
+#确认secret ，然后获取token
+kubectl get secret -A
+kubectl -n kube-system describe secret admin-user
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[三 - K8S]]></title>
+        <id>https://edison-lucky.github.io/post/san-k8s/</id>
+        <link href="https://edison-lucky.github.io/post/san-k8s/">
+        </link>
+        <updated>2023-02-26T11:10:53.000Z</updated>
+        <content type="html"><![CDATA[<h2 id="1梳理k8s-各组件功能">1.梳理k8s 各组件功能</h2>
+<h2 id="控制平面组件control-plane-components">控制平面组件（Control Plane Components）</h2>
+<h3 id="kube-apiserver">kube-apiserver</h3>
+<p>API 服务器是 Kubernetes 控制平面的组件， 该组件负责公开了 Kubernetes API，负责处理接受请求的工作。 API 服务器是 Kubernetes 控制平面的前端。<br>
+Kubernetes API 服务器的主要实现是 kube-apiserver。 kube-apiserver 设计上考虑了水平扩缩，也就是说，它可通过部署多个实例来进行扩缩。 你可以运行 kube-apiserver 的多个实例，并在这些实例之间平衡流量。</p>
+<h3 id="etcd">etcd</h3>
+<p>一致且高度可用的键值存储，用作 Kubernetes 的所有集群数据的后台数据库。<br>
+如果你的 Kubernetes 集群使用 etcd 作为其后台数据库， 请确保你针对这些数据有一份 备份计划。</p>
+<h3 id="kube-scheduler">kube-scheduler</h3>
+<p>kube-scheduler 是控制平面的组件， 负责监视新创建的、未指定运行节点（node）的 Pods， 并选择节点来让 Pod 在上面运行。<br>
+调度决策考虑的因素包括单个 Pod 及 Pods 集合的资源需求、软硬件及策略约束、 亲和性及反亲和性规范、数据位置、工作负载间的干扰及最后时限。</p>
+<h3 id="kube-controller-manager">kube-controller-manager</h3>
+<p>kube-controller-manager 是控制平面的组件， 负责运行控制器进程。<br>
+从逻辑上讲， 每个控制器都是一个单独的进程， 但是为了降低复杂性，它们都被编译到同一个可执行文件，并在同一个进程中运行。<br>
+这些控制器包括：</p>
+<ul>
+<li>节点控制器（Node Controller）：负责在节点出现故障时进行通知和响应</li>
+<li>任务控制器（Job Controller）：监测代表一次性任务的 Job 对象，然后创建 Pods 来运行这些任务直至完成</li>
+<li>端点分片控制器（EndpointSlice controller）：填充端点分片（EndpointSlice）对象（以提供 Service 和 Pod 之间的链接）。</li>
+<li>服务账号控制器（ServiceAccount controller）：为新的命名空间创建默认的服务账号（ServiceAccount）。</li>
+</ul>
+<h3 id="cloud-controller-manager">cloud-controller-manager</h3>
+<p>一个 Kubernetes 控制平面组件， 嵌入了特定于云平台的控制逻辑。 云控制器管理器（Cloud Controller Manager）允许你将你的集群连接到云提供商的 API 之上， 并将与该云平台交互的组件同与你的集群交互的组件分离开来。<br>
+cloud-controller-manager 仅运行特定于云平台的控制器。 因此如果你在自己的环境中运行 Kubernetes，或者在本地计算机中运行学习环境， 所部署的集群不需要有云控制器管理器。<br>
+与 kube-controller-manager 类似，cloud-controller-manager 将若干逻辑上独立的控制回路组合到同一个可执行文件中， 供你以同一进程的方式运行。 你可以对其执行水平扩容（运行不止一个副本）以提升性能或者增强容错能力。</p>
+<p>下面的控制器都包含对云平台驱动的依赖：</p>
+<ul>
+<li>节点控制器（Node Controller）：用于在节点终止响应后检查云提供商以确定节点是否已被删除</li>
+<li>路由控制器（Route Controller）：用于在底层云基础架构中设置路由</li>
+<li>服务控制器（Service Controller）：用于创建、更新和删除云提供商负载均衡器</li>
+</ul>
+<h2 id="node-组件">Node 组件</h2>
+<h3 id="kubelet">kubelet</h3>
+<p>kubelet 会在集群中每个节点（node）上运行。 它保证容器（containers）都运行在 Pod 中。<br>
+kubelet 接收一组通过各类机制提供给它的 PodSpecs， 确保这些 PodSpecs 中描述的容器处于运行状态且健康。 kubelet 不会管理不是由 Kubernetes 创建的容器。</p>
+<h3 id="kube-proxy">kube-proxy</h3>
+<p>kube-proxy 是集群中每个节点（node）上所运行的网络代理， 实现 Kubernetes 服务（Service） 概念的一部分。<br>
+kube-proxy 维护节点上的一些网络规则， 这些网络规则会允许从集群内部或外部的网络会话与 Pod 进行网络通信。<br>
+如果操作系统提供了可用的数据包过滤层，则 kube-proxy 会通过它来实现网络规则。 否则，kube-proxy 仅做流量转发。</p>
+<h3 id="容器运行时container-runtime">容器运行时（Container Runtime）</h3>
+<p>容器运行环境是负责运行容器的软件。<br>
+Kubernetes 支持许多容器运行环境，例如 containerd、 CRI-O 以及 Kubernetes CRI (容器运行环境接口) 的其他任何实现</p>
+<h2 id="2基本掌握containerd的安装和是使用">2.基本掌握containerd的安装和是使用</h2>
+<pre><code class="language-sh">参考文件: https://www.qikqiak.com/post/containerd-usage/
+apt-cache madison containerd
+apt install containerd
+
+whereis runc
+whereis containerd
+
+#默认containerd 安装路径
+mkdir /etc/containerd
+containerd config default &gt; /etc/containerd/config.toml
+
+#runc 验证环境
+runc -v
+
+
+#拉镜像
+ctr image pull docker.io/library/nginx:alpine
+
+列出本地镜像
+ctr image ls
+ctr image check
+
+
+重新打标签
+➜  ~ ctr image tag docker.io/library/nginx:alpine harbor.k8s.local/course/nginx:alpine
+harbor.k8s.local/course/nginx:alpine
+➜  ~ ctr image ls -q
+docker.io/library/nginx:alpine
+harbor.k8s.local/course/nginx:alpine
+
+
+#删除镜像
+➜  ~ ctr image rm harbor.k8s.local/course/nginx:alpine
+harbor.k8s.local/course/nginx:alpine
+➜  ~ ctr image ls -q
+docker.io/library/nginx:alpine
+
+#默认版本太旧可以做二进制更新
+
+</code></pre>
+<h2 id="3基于kubeadm和containerd部署单master-k8s-v124x">3.基于kubeadm和containerd部署单master k8s v1.24.x</h2>
+<pre><code class="language-sh">参考文件：https://www.cnblogs.com/xiaoyuzai09/p/16922661.html
+参考文件：https://blog.csdn.net/weixin_42173770/article/details/126178401
+
+cat &gt; /etc/sysctl.d/k8s.conf &lt;&lt;EOF
+net.bridge.bridge-nf-call-iptables=1
+net.bridge.bridge-nf-call-ip6tables=1
+net.bridge.bridge-nf-call-arptables = 1
+net.ipv4.ip_forward=1
+net.ipv4.tcp_tw_recycle=0
+net.core.somaxconn = 32768
+vm.swappiness=0 # 禁止使用 swap 空间，只有当系统 OOM 时才允许使用它 vm.overcommit_memory=1 # 不检查物理内存是否够用
+vm.panic_on_oom=0 # 开启 OOM
+fs.inotify.max_user_instances=8192
+fs.inotify.max_user_watches=1048576
+fs.file-max=52706963
+fs.nr_open=52706963
+net.ipv6.conf.all.disable_ipv6=1
+net.netfilter.nf_conntrack_max=2310720
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.neigh.default.gc_thresh1 = 80000
+net.ipv4.neigh.default.gc_thresh2 = 90000
+net.ipv4.neigh.default.gc_thresh3 = 100000
+EOF
+
+sysctl -p /etc/sysctl.d/k8s.conf
+
+modprobe overlay
+modprobe br_netfilter
+modprobe -- ip_vs
+modprobe -- ip_vs_rr
+modprobe -- ip_vs_wrr
+modprobe -- ip_vs_sh
+modprobe -- nf_conntrack
+
+临时关闭： swapoff -a
+#关闭swap
+sudo vi /etc/fstab
+#/swap.img      none    swap    sw      0       0
+
+#安装containerd
+apt-get update &amp;&amp; sudo apt-get install -y containerd
+mkdir -p /etc/containerd &amp;&amp; containerd config default | sudo tee /etc/containerd/config.toml
+
+systemctl enable containerd &amp;&amp; systemctl start containerd
+
+ctr -v #查看版本
+
+#安装配置 kubelet kubeadm kubectl
+apt update &amp;&amp; apt install apt-transport-https
+apt-add-repository &quot;deb http://apt.kubernetes.io/kubernetes-xenial main&quot;
+apt-get update
+apt-cache madison kubelet kubectl kubeadm |grep '1.24.2-00' 
+apt install -y kubelet=1.24.2-00 kubectl=1.24.2-00 kubeadm=1.24.2-00
+
+#master节点 初始化 sapiserver-advertise-address 填上本机IP
+kubeadm init --kubernetes-version=1.24.2  \
+ --apiserver-advertise-address=10.8.21.181  \
+ --service-cidr=10.200.0.0/16 --pod-network-cidr=10.122.0.0/16
+
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+</code></pre>
+<h2 id="4部署harbor并实现httpssan签发证书">4.部署harbor并实现https(SAN签发证书)</h2>
+<h3 id="生成证书">生成证书</h3>
+<pre><code class="language-sh">参考： https://blog.51cto.com/u_11239407/2921985
+
+比如生产证书域名：harbor.vmdchyi.xyz
+-----------------------------------------
+#生成证书颁发机构证书 
+openssl genrsa -out ca.key 4096
+
+
+openssl req -x509 -new -nodes -sha512 -days 3650 \ -subj &quot;/C=CN/ST=Shenzhen/L=Shenzhen/O=Harbor/OU=Harbor/CN=harbor.vmdchyi.xyz&quot; \ -key ca.key \ -out ca.crt 
+
+openssl req -x509 -new -nodes -sha512 -days 3650 -subj &quot;/C=CN/ST=Shenzhen/L=Shenzhen/O=Harbor/OU=Harbor/CN=harbor.vmdchyi.xyz&quot; -key ca.key -out ca.crt 
+
+-----------------------------------------
+#生成服务器证书 
+
+openssl genrsa -out harbor.vmdchyi.xyz.key 4096
+
+openssl req -sha512 -new -subj &quot;/C=CN/ST=Shenzhen/L=Shenzhen/O=Harbor/OU=Harbor/CN=harbor.vmdchyi.xyz&quot; -key harbor.vmdchyi.xyz.key -out harbor.vmdchyi.xyz.csr
+
+
+#证书签发SAN文件
+cat &gt; v3.ext &lt;&lt;-EOF
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1=harbor.vmdchyi.xyz
+DNS.2=harbor.vmdchyi.xyz.local
+EOF
+
+#自签发harbor证书
+openssl x509 -req -sha512 -days 3650 -extfile v3.ext -CA ca.crt -CAkey ca.key -CAcreateserial -in harbor.vmdchyi.xyz.csr -out harbor.vmdchyi.xyz.crt
+-----------------------------------------
+提供证书给Harbor和Docker
+openssl x509 -inform PEM -in harbor.vmdchyi.xyz.crt -out harbor.vmdchyi.xyz.cert
+</code></pre>
+<h3 id="配置harbor">配置harbor</h3>
+<pre><code class="language-sh">#下载
+wget https://github.com/goharbor/harbor/releases/download/v2.6.2/harbor-offline-installer-v2.6.2.tgz
+
+#安装harbor
+wget https://github.com/goharbor/harbor/releases/download/v2.6.2/harbor-offline-installer-v2.6.2.tgz
+tar xf harbor-offline-installer-v2.6.2.tgz
+cd harbor 
+
+
+#刚才生成的证书复制
+mkdir -p /opt/harbor/cert
+cp harbor.vmdchyi.xyz.crt /opt/harbor/cert
+cp harbor.vmdchyi.xyz.key /opt/harbor/cert
+
+
+#配置 harbor
+$ cd /opt/harbor
+$ cp harbor.yml.tmpl harbor.yml
+# 修改配置文件
+$ vi harbor.yml
+...
+...
+...
+hostname: xxxxx.com
+https:
+ port: 443
+ certificate: /opt/harbor/cert/harbor.vmdchyi.xyz.crt 
+private_key: /opt/harbor/cert/harbor.vmdchyi.xyz.key
+external_url: https://harbor.vmdchyi.xyz
+...
+...
+...
+#安装启动
+运行 prepare 脚本以启用 HTTPS
+./prepare
+
+#开始安装
+./install.sh
+
+#harbor的停止与启动
+$ cd harbor
+$ docker-compose stop # 停止
+$ docker-compose start # 启动(第一次需要使用 up -d)
+$ docker-compose down # 停止并删除容器（慎用）
+$ docker-compose up -d # 创建并启动
+
+</code></pre>
+<h2 id="5部署haproxy和keepalived高可用负载均衡">5.部署haproxy和keepalived高可用负载均衡</h2>
+<pre><code class="language-sh">
+10.8.21.133 vip
+
+#lb1 服务器  
+10.8.21.181 lb1
+10.8.21.182 lb2
+
+#机器服务器
+10.8.21.191
+10.8.21.192
+10.8.21.193
+
+apt install -y keepalived
+cp /usr/share/doc/keepalived/samples/keepalived.conf.vrrp /etc/keepalived/keepalived.conf
+
+
+#virtual_ipaddress 是服务对象
+
+#####Master -lb1 - 10.8.21.181
+! Configuration File for keepalived
+global_defs {
+   notification_email {
+     acassen
+   }
+   notification_email_from Alexandre.Cassen@firewall.loc
+   smtp_server 192.168.200.1
+   smtp_connect_timeout 30
+   router_id LVS_DEVEL
+}
+vrrp_instance VI_1 {
+    state MASTER
+    interface eth0
+    garp_master_delay 10
+    smtp_alert
+    virtual_router_id 51
+    priority 100
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 1111
+    }
+    virtual_ipaddress {
+        10.8.21.133
+    }
+}
+
+#####备用 Backup -lb2 -- 10.8.21.182
+! Configuration File for keepalived
+global_defs {
+   notification_email {
+     acassen
+   }
+   notification_email_from Alexandre.Cassen@firewall.loc
+   smtp_server 192.168.200.1
+   smtp_connect_timeout 30
+   router_id LVS_DEVEL
+}
+vrrp_instance VI_1 {
+    state BACKUP
+    interface eth0
+    garp_master_delay 10
+    smtp_alert
+    virtual_router_id 51
+    priority 98
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 1111
+    }
+    virtual_ipaddress {
+        10.8.21.133
+    }
+}
+
+systemctl start keepalived
+systemctl enable keepalived
+
+
+apt install -y haproxy 
+
+#lb1 服务器  
+vim /etc/haproxy/haproxy.cfg
+
+listen web
+  bind 10.8.21.181
+  mode tcp 
+  server server1 10.8.21.191:6443 check
+  server server2 10.8.21.192:6443 check
+  server server3 10.8.21.193:6443 check
+
+
+
+#lb2 服务器  
+vim /etc/haproxy/haproxy.cfg
+
+listen web
+  bind 10.8.21.182
+  mode tcp 
+  server server1 10.8.21.191:6443 check
+  server server2 10.8.21.192:6443 check
+  server server3 10.8.21.193:6443 check
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[二 ：Docker]]></title>
+        <id>https://edison-lucky.github.io/post/er-docker/</id>
+        <link href="https://edison-lucky.github.io/post/er-docker/">
+        </link>
+        <updated>2023-02-26T11:09:54.000Z</updated>
+        <content type="html"><![CDATA[<h2 id="1-搭建配置harbor私有仓库">1、搭建配置harbor私有仓库；</h2>
+<pre><code class="language-sh">#安装harbor
+wget https://github.com/goharbor/harbor/releases/download/v2.5.2/harbor-offline-installer-v2.5.2.tgz
+tar xf harbor-offline-installer-v2.5.2.tgz
+cd harbor 
+
+#在 freessl 网站生成证书
+
+#配置 harbor
+mkdir -p /opt/harbor/cert
+cp xxxxx.com.crt /opt/harbor/cert
+cp xxxxx.com.key /opt/harbor/cert
+
+$ cd /opt/harbor
+$ cp harbor.yml.tmpl harbor.yml
+# 修改配置文件
+$ vi harbor.yml
+...
+...
+...
+hostname: xxxxx.com
+https:
+ port: 443
+ certificate: /opt/harbor/cert/xxxxx.com.crt 
+private_key: /opt/harbor/cert/xxxxx.com.key
+external_url: https://xxxxx.com
+...
+...
+...
+#安装启动
+运行 prepare 脚本以启用 HTTPS
+./prepare
+
+#开始安装
+./install.sh
+
+#harbor的停止与启动
+$ cd harbor
+$ docker-compose stop # 停止
+$ docker-compose start # 启动(第一次需要使用 up -d)
+$ docker-compose down # 停止并删除容器（慎用）
+$ docker-compose up -d # 创建并启动
+
+
+</code></pre>
+<h2 id="2-掌握docker网络">2、掌握docker网络；</h2>
+<p>参考： <a href="https://www.cnblogs.com/liugp/p/16328904.html">Docker四种网络模式（Bridge，Host，Container，None） - 大数据老司机 - 博客园 (cnblogs.com)</a></p>
+<h3 id="bridge模式">Bridge模式</h3>
+<p>当Docker server启动时，会在主机上创建一个名为docker0的虚拟网桥，此主机上启动的Docker容器会连接到这个虚拟网桥上。虚拟网桥的工作方式和物理交换机类似，这样主机上的所有容器就通过交换机连在了一个二层网络中。<br>
+当创建一个 Docker 容器的时候，同时会创建了一对 veth pair接口（当数据包发送到一个接口时，另外一个接口也可以收到相同的数据包）。这对接口一端在容器内，即 eth0；另一端在本地并被挂载到docker0 网桥，名称以 veth 开头（例如 vethAQI2QT）。通过这种方式，主机可以跟容器通信，容器之间也可以相互通信。Docker 就创建了在主机和所有容器之间一个虚拟共享网络。</p>
+<h3 id="host模式">Host模式</h3>
+<p>相当于Vmware中的NAT模式，与宿主机在同一个网络中，但没有独立IP地址。一个Docker容器一般会分配一个独立的Network Namespace。但如果启动容器的时候使用host模式，那么这个容器将不会获得一个独立的Network Namespace，而是和宿主机共用一个Network Namespace。容器将不会虚拟出自己的网卡，配置自己的IP等，而是使用宿主机的IP和端口。可以通过 --net=host 指定使用 host 网络</p>
+<h3 id="container模式">Container模式</h3>
+<p>Docker网络container模式是指定其和已经存在的某个容器共享一个 Network Namespace，此时这两个容器共同使用同一网卡、主机名、IP 地址，容器间通讯可直接通过本地回环 lo 接口通讯。但这两个容器在其他的资源上，如文件系统、进程列表等还是隔离的。</p>
+<h3 id="none模式">None模式</h3>
+<p>容器有自己的网络命名空间，但不做任何配置，它与宿主机、与其他容器都不连通的。</p>
+<h2 id="3-安装docker-compose并利用它组装一个多容器的服务如nginx-mysql-php">3、安装docker-compose并利用它组装一个多容器的服务：如nginx、mysql、php</h2>
+<p>参考：<a href="https://www.cnblogs.com/zhijiyiyu/p/15417805.html">使用Docker Compose 搭建lnmp - 知己一语 - 博客园 (cnblogs.com)</a></p>
+<h3 id="nginx-配置">nginx 配置</h3>
+<pre><code class="language-sh">#创建项目目录 compose_nginx; 
+#创建服务子目录
+mkdir /opt/compose_nginx/
+cd /opt/compose_nginx
+mkdir nginx mysql php wwwroot
+
+#上传wordpress软件包
+cd /opt/compose_nginx/wwwroot/
+wget https://wordpress.org/wordpress-6.1.1.tar.gz
+tar xf wordpress-6.1.1.tar.gz 
+
+#上传nginx软件包
+cd nginx/
+wget http://nginx.org/download/nginx-1.22.1.tar.gz
+tar xf nginx-1.22.1.tar.gz
+
+
+#编写nginx的Dockerfile文件
+# vim Dockerfile 
+
+FROM centos:centos7.9.2009
+MAINTAINER this is nginx image &lt;Edison&gt;
+RUN yum -y install pcre-devel zlib-devel gcc gcc-c++ make
+RUN useradd -M -s /sbin/nologin nginx
+ADD nginx-1.22.1.tar.gz /usr/local/src/
+WORKDIR /usr/local/src/nginx-1.22.1
+RUN ./configure \
+--prefix=/usr/local/nginx \
+--user=nginx \
+--group=nginx \
+--with-http_stub_status_module &amp;&amp; make -j8&amp;&amp; make install
+ENV PATH /usr/local/nginx/sbin:$PATH
+RUN sed -i 's/#charset koi8-r;/charset utf-8;/' /usr/local/nginx/conf/nginx.conf \
+  &amp;&amp; sed -i '45 s/index  index.html index.htm;/index  index.html index.php;/' /usr/local/nginx/conf/nginx.conf \
+  &amp;&amp; sed -i '65,71 s/#//' /usr/local/nginx/conf/nginx.conf \
+  &amp;&amp; sed -i 's/fastcgi_pass   127.0.0.1:9000;/fastcgi_pass   172.18.0.30:9000;/' /usr/local/nginx/conf/nginx.conf \
+  &amp;&amp; sed -i 's#/scripts#/usr/local/nginx/html#' /usr/local/nginx/conf/nginx.conf
+
+EXPOSE 80
+EXPOSE 443
+ENTRYPOINT [ &quot;/usr/local/nginx/sbin/nginx&quot;, &quot;-g&quot;, &quot;daemon off;&quot; ]
+
+</code></pre>
+<h3 id="mysql-配置">MYSQL 配置</h3>
+<pre><code class="language-sh">MYSQL
+#进入mysql子目录
+cd /opt/compose_nginx/mysql/
+#将mysql包上传到此目录
+wget https://dev.mysql.com/get/Downloads/MySQL-5.7/mysql-boost-5.7.40.tar.gz
+
+
+#编写mysql的Dockerfile文件
+[root@host103 mysql]# vim Dockerfile
+FROM centos:centos7.9.2009
+MAINTAINER this is mysql image &lt;zhi&gt;
+RUN yum -y install gcc gcc-c++ ncurses ncurses-devel bison cmake make
+RUN useradd -M -s /sbin/nologin  mysql
+ADD mysql-boost-5.7.40.tar.gz /usr/local/src/
+WORKDIR /usr/local/src/mysql-boost-5.7.40/
+RUN cmake \
+-DCMAKE_INSTALL_PREFIX=/usr/local/mysql \
+-DMYSQL_UNIX_ADDR=/usr/local/mysql/mysql.sock \
+-DSYSCONFDIR=/etc \
+-DSYSTEMD_PID_DIR=/usr/local/mysql \
+-DDEFAULT_CHARSET=utf8  \
+-DDEFAULT_COLLATION=utf8_general_ci \
+-DWITH_INNOBASE_STORAGE_ENGINE=1 \
+-DWITH_ARCHIVE_STORAGE_ENGINE=1 \
+-DWITH_BLACKHOLE_STORAGE_ENGINE=1 \
+-DWITH_PERFSCHEMA_STORAGE_ENGINE=1 \
+-DMYSQL_DATADIR=/usr/local/mysql/data \
+-DWITH_BOOST=boost \
+-DWITH_SYSTEMD=1 &amp;&amp; make -j8 &amp;&amp; make install
+RUN chown -R mysql:mysql /usr/local/mysql/
+ADD my.cnf /etc/
+RUN chown mysql:mysql /etc/my.cnf
+ENV PATH /usr/local/mysql/bin:/usr/local/mysql/lib:$PATH
+WORKDIR /usr/local/mysql/
+RUN bin/mysqld \
+--initialize-insecure \
+--user=mysql \
+--basedir=/usr/local/mysql \
+--datadir=/usr/local/mysql/data
+RUN cp /usr/local/mysql/usr/lib/systemd/system/mysqld.service /usr/lib/systemd/system/
+EXPOSE 3306
+CMD /usr/local/mysql/bin/mysqld
+
+
+#配置myslq主配置文件my.cnf(用来复制到容器)
+[root@host103 mysql]# vim my.cnf 
+[client]
+port = 3306
+socket = /usr/local/mysql/mysql.sock
+
+[mysql]
+port = 3306
+socket = /usr/local/mysql/mysql.sock
+
+[mysqld]
+user = mysql
+basedir = /usr/local/mysql
+datadir = /usr/local/mysql/data
+port = 3306
+character_set_server=utf8
+pid-file = /usr/local/mysql/mysqld.pid
+socket = /usr/local/mysql/mysql.sock
+server-id = 1
+
+sql_mode=NO_ENGINE_SUBSTITUTION,STRICT_TRANS_TABLES,NO_AUTO_CREATE_USER,NO_AUTO_VALUE_ON_ZERO,NO_ZERO_IN_DATE,NO_ZERO_DATE,ERROR_FOR_DIVISION_BY_ZERO,PIPES_AS_CONCAT,ANSI_QUOTES
+
+</code></pre>
+<h3 id="php-配置">PHP 配置</h3>
+<pre><code class="language-sh">#下载php
+cd /opt/compose_nginx/php/
+wget https://www.php.net/distributions/php-8.0.26.tar.bz2
+
+#编写php的dockerfile
+[root@host103 php]# vim Dockerfile
+FROM centos:centos7.9.2009
+MAINTAINER this is php image &lt;zhi&gt;
+RUN yum -y install gd \
+libjpeg libjpeg-devel \
+libpng libpng-devel \
+freetype freetype-devel \
+libxml2 libxml2-devel \
+zlib zlib-devel \
+curl curl-devel \
+openssl openssl-devel \
+gcc gcc-c++ make pcre-devel
+RUN useradd -M -s /sbin/nologin nginx
+ADD php-8.0.26.tar.bz2 /usr/local/src/
+WORKDIR /usr/local/src/php-8.0.26
+RUN ./configure \
+--prefix=/usr/local/php \
+--with-mysql-sock=/usr/local/mysql/mysql.sock \
+--with-mysqli \
+--with-zlib \
+--with-curl \
+--with-gd \
+--with-jpeg-dir \
+--with-png-dir \
+--with-freetype-dir \
+--with-openssl \
+--enable-fpm \
+--enable-mbstring \
+--enable-xml \
+--enable-session \
+--enable-ftp \
+--enable-pdo \
+--enable-tokenizer \
+--enable-zip &amp;&amp; make &amp;&amp; make install
+ENV PATH /usr/local/php/bin:/usr/local/php/sbin:$PATH
+
+
+RUN \cp  /usr/local/src/php-8.0.26/php.ini-development /usr/local/php/lib/php.ini \  &amp;&amp; sed -i 's#mysqli.default_socket =#mysqli.default_socket = /usr/local/mysql/mysql.sock#' /usr/local/php/lib/php.ini \  &amp;&amp; sed -i '939 s#;date.timezone =#date.timezone = Asia/Shanghai#' /usr/local/php/lib/php.ini
+
+RUN \cp /usr/local/php/etc/php-fpm.conf.default  /usr/local/php/etc/php-fpm.conf \
+  &amp;&amp; sed -i '17 s/^;//' /usr/local/php/etc/php-fpm.conf
+
+RUN \cp /usr/local/php/etc/php-fpm.d/www.conf.default /usr/local/php/etc/php-fpm.d/www.conf \
+  &amp;&amp; sed -i 's#user = nobody#user = nginx#' /usr/local/php/etc/php-fpm.d/www.conf \
+  &amp;&amp; sed -i 's#group = nobody#group = nginx#' /usr/local/php/etc/php-fpm.d/www.conf \  &amp;&amp; sed -i 's#listen = 127.0.0.1:9000#listen = 172.18.0.30:9000#' /usr/local/php/etc/php-fpm.d/www.conf
+
+EXPOSE 9000
+ENTRYPOINT [ &quot;/usr/local/php/sbin/php-fpm&quot;, &quot;-F&quot; ]
+
+
+</code></pre>
+<h3 id="docker-compose">Docker-compose</h3>
+<pre><code class="language-sh">Docker-compose
+
+#先拉取镜像centos 7
+docker pull centos:centos7.9.2009
+
+
+# vim /opt/compose_nginx/docker-compose.yml
+#使用版本2（3版本不支持指令volumes_from)
+version: '2'
+services:
+  #配置nginx服务
+  nginx:
+    #设置主机名为nginx
+    hostname: nginx
+    #使用dockerfile创建镜像。Dockerfile文件在当前目录的nginx目录下，文件名为Dockerfile
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    #容器名为nginx
+    container_name: nginx
+    #暴露端口80和443
+    ports:
+      - 80:80
+      - 443:443
+    #加入到lnmp网络中，使用ip172.18.0.0.10
+    networks:
+      lnmp:
+        ipv4_address: 172.18.0.10
+    #将当前目录的wwwroot目录挂载到容器的/usr/local/nginx/html
+    volumes:
+      - ./wwwroot/:/usr/local/nginx/html
+  #配置服务mysql
+  mysql:
+    hostname: mysql
+    build:
+      context: ./mysql
+      dockerfile: Dockerfile
+    container_name: mysql
+    ports:
+      - 3306:3306
+    networks:
+      lnmp:
+        ipv4_address: 172.18.0.20
+    #设置/usr/local/mysql为数据卷
+    volumes:
+      - /usr/local/mysql
+  #配置服务php    
+  php:
+    hostname: php
+    build:
+      context: ./php
+      dockerfile: Dockerfile
+    container_name: php
+    ports:
+      - 9000:9000
+    networks:
+      lnmp:
+        ipv4_address: 172.18.0.30
+    #从nginx容器和mysql容器获取数据卷    
+    volumes_from:
+      - nginx
+      - mysql
+    #php容器需要在nginx和mysql之后启动  
+    depends_on:
+      - nginx
+      - mysql
+    #php和容器nginx，容器mysql连接   
+    links:
+      - nginx
+      - mysql
+#配置网络模式和网络名      
+networks:
+  #设置网络名lnmp
+  lnmp:
+    #网络模式为bridge桥接莫斯
+    driver: bridge
+    ipam:
+      config:
+        #使用的网段为172.18.0.0/16
+        - subnet: 172.18.0.0/16
+
+#在工作目录使用此命令。
+#-f： --file-name, 指定模板文件。默认为docker-compose.yml
+#-p: --project-name NAME ，指定项目名称，默认使用目录名
+#-d： 在后台运行
+docker-compose -f docker-compose.yml up -d
+
+</code></pre>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[一 ：Docker]]></title>
+        <id>https://edison-lucky.github.io/post/yi-docker/</id>
+        <link href="https://edison-lucky.github.io/post/yi-docker/">
+        </link>
+        <updated>2023-02-26T11:09:08.000Z</updated>
+        <content type="html"><![CDATA[<h2 id="1-掌握namespace-cgroup在容器中的作用">1、掌握namespace、cgroup在容器中的作用；</h2>
+<p>参考：<a href="https://www.nginx-cn.net/blog/what-are-namespaces-cgroups-how-do-they-work/">Namespace 和 Cgroup 的简介及其工作原理 - NGINX (nginx-cn.net)</a></p>
+<h3 id="namespaces">namespaces</h3>
+<p>是许多编程语言使用的一种代码组织的形式，通过命名空间来分类，区别不同的代码功能，避免不同的代码片段（通常由不同的人协同工作或调用已有的代码片段）同时使用时由于不同代码间变量名相同而造成冲突</p>
+<p>6个隔离类型</p>
+<ul>
+<li>
+<p>**UTS namespace **<br>
+提供了 hostname 和 domain 的隔离，这样每个容器就拥有独立的主机名和域名了，在网络上就可以被视为一个独立的节点，在容器中对 hostname 的命名不会对宿主机造成任何影响。</p>
+</li>
+<li>
+<p>**PID namespace **<br>
+完成的是进程号的隔离，保证了容器的 init 进程是以 1 号进程来启动的。</p>
+</li>
+<li>
+<p>**IPC namespace **<br>
+实现了进程间通信的隔离，包括常见的几种进程间通信机制，例如：信号量，消息队列和共享内存。我们知道，要完成 IPC，需要申请一个全局唯一的标识符，即 IPC 标识符，所以 IPC 资源隔离主要完成的就是隔离 IPC 标识符。</p>
+</li>
+<li>
+<p>**Mount namespace **<br>
+通过隔离文件系统的挂载点来达到对文件系统的隔离。保证了容器看到的文件系统的视图，是容器镜像提供的一个文件系统，也就是说它看不见宿主机上的其它文件，除了通过 -v 参数 bound 的那种模式，是可以把宿主机上面的一些目录和文件，让它在容器里面可见的；</p>
+</li>
+<li>
+<p>**Network namespace **<br>
+实现了操作系统层面的网络资源隔离，包括网络设备接口、IPv4 和 IPv6 协议栈，IP 路由表，防火墙，/proc/net 目录，/sys/class/net 目录，Sockets 套接字等资源。同一个网络设备只能位于一个 Network namespace 中，不同 namespace 中的网络设备可以利用 veth pair 进行桥接。</p>
+</li>
+<li>
+<p>**User namespace **<br>
+主要隔离了安全相关的标识符和属性，包括 User ID、User Group ID、root 目录、key 以及特殊权限。</p>
+</li>
+</ul>
+<h3 id="cgroup">cgroup</h3>
+<p>控制组 (cgroup) 是 Linux 内核的一个特性，用于限制、记录和隔离一组进程的资源使用（CPU、内存、磁盘 I/O、网络等）。</p>
+<p>Cgroup 具有以下特性：</p>
+<ul>
+<li>资源限制 —— 您可以配置 cgroup，从而限制进程可以对特定资源（例如内存或 CPU）的使用量。</li>
+<li>优先级 —— 当资源发生冲突时，您可以控制一个进程相比另一个 cgroup 中的进程可以使用的资源量（CPU、磁盘或网络）。</li>
+<li>记录 —— 在 cgroup 级别监控和报告资源限制。<br>
+（ 控制 —— 您可以使用单个命令更改 cgroup 中所有进程的状态（冻结、停止或重新启动）。</li>
+</ul>
+<p>Cgroup 的作用基本上就是控制一个进程或一组进程可以访问或使用给定关键资源（CPU、内存、网络和磁盘 I/O）的量。一个容器中通常运行了多个进程，并且您需要对这些进程实施统一控制，因此 cgroup 是容器的关键组件。Kubernetes 环境使用 cgroup 在 pod 级别上部署 资源请求和限制 以及对应的 QoS 类。</p>
+<h2 id="2-编排工具及依赖技术总结">2、编排工具及依赖技术总结</h2>
+<h3 id="kubernetes">Kubernetes</h3>
+<p>Kubernetes是一个开源的，开箱即用的容器集群管理器和业务流程。它具有出色的构建 调度器 和资源管理器，用于以更有效和高度可用的方式部署容器。Kubernetes已成为许多组织事实上的容器编排工具。kubernetes项目由google与世界各地的贡献者维护。它提供了本机Docker工具不提供的许多功能。</p>
+<h3 id="docker-swarm">Docker Swarm</h3>
+<p>Docker生态系统包括从开发到生产部署框架的工具。在该列表中，docker swarm适用于集群管理。可以使用docker-compose，swarm，overlay网络和良好的服务发现工具（例如etcd或consul）的组合来管理Docker容器集群。</p>
+<h2 id="3-基于dockerfile制作一个nginx镜像">3、基于dockerfile制作一个nginx镜像；</h2>
+<pre><code class="language-sh">####在Dockerfile目录下准备编译安装的相关文件####
+mkdir -p /data/dockerfile/nginx
+cd /data/dockerfile/nginx
+
+wget http://nginx.org/download/nginx-1.16.1.tar.gz
+
+vim nginx.conf
+创建nginx.conf 配置和优化
+
+echo &quot;My Nginx Page&quot; &gt; index.html
+
+####编写Dockerfile文件###
+vim Dockerfile
+
+FROM centos:centos7.9.2009
+MAINTAINER anson &lt;anson@testing.com&gt;
+RUN yum install -y  gcc gcc-c++  pcre pcre-devel zlib zlib-devel openssl openssl-devel \
+    &amp;&amp; useradd -r -s /sbin/nologin nginx \
+    &amp;&amp; yum clean all 
+ADD nginx-1.16.1.tar.gz /usr/local/src/ 
+RUN cd /usr/local/src/nginx-1.16.1 \
+    &amp;&amp; ./configure --prefix=/apps/nginx \
+    &amp;&amp; make \
+    &amp;&amp; make install \
+    &amp;&amp; rm -rf /usr/local/src/nginx*
+ADD nginx.conf /apps/nginx/conf/nginx.conf
+COPY index.html /apps/nginx/html/
+RUN ln -s /apps/nginx/sbin/nginx /usr/sbin/nginx 
+EXPOSE 80 443
+CMD [&quot;nginx&quot;,&quot;-g&quot;,&quot;daemon off;&quot;]
+
+
+#####生成nginx镜像  ######
+docker build -t nginx-centos7:v1 .
+
+#####生成容器测试镜像#####
+docker run  -d -p 80:80  nginx-centos7:v1 
+docker ps -a
+
+#进入容器查看
+docker exec -it XXXXX bash
+</code></pre>
+<h2 id="4-镜像构建总结">4、镜像构建总结；</h2>
+<p>通过Dockerfile 构建的镜像可以可以快速的运行起来。同时这方式可以在短时间内方便和快速创建同样多个的容器</p>
+]]></content>
+    </entry>
+    <entry>
+        <title type="html"><![CDATA[Y73059]]></title>
+        <id>https://edison-lucky.github.io/post/hello-gridea/</id>
+        <link href="https://edison-lucky.github.io/post/hello-gridea/">
+        </link>
+        <updated>2018-12-11T16:00:00.000Z</updated>
+        <summary type="html"><![CDATA[<p>👏  欢迎使用 <strong>Y73059</strong> ！<br>
+✍️  <strong>Y73059</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
+]]></summary>
+        <content type="html"><![CDATA[<p>👏  欢迎使用 <strong>Y73059</strong> ！<br>
+✍️  <strong>Y73059</strong> 一个静态博客写作客户端。你可以用它来记录你的生活、心情、知识、笔记、创意... ...</p>
+<!-- more -->
+<h2 id="特性">特性👇</h2>
+<p>📝  你可以使用最酷的 <strong>Markdown</strong> 语法，进行快速创作</p>
+<p>🌉  你可以给文章配上精美的封面图和在文章任意位置插入图片</p>
+<p>🏷️  你可以对文章进行标签分组</p>
+<p>📋  你可以自定义菜单，甚至可以创建外部链接菜单</p>
+<p>💻  你可以在 <strong>Windows</strong>，<strong>MacOS</strong> 或 <strong>Linux</strong> 设备上使用此客户端</p>
+<p>🌎  你可以使用 <strong>𝖦𝗂𝗍𝗁𝗎𝖻 𝖯𝖺𝗀𝖾𝗌</strong> 或 <strong>Coding Pages</strong> 向世界展示，未来将支持更多平台</p>
+<p>💬  你可以进行简单的配置，接入 [Gitalk] 或 <a href="https://github.com/SukkaW/DisqusJS">DisqusJS</a> 评论系统</p>
+<p>🇬🇧  你可以使用<strong>中文简体</strong>或<strong>英语</strong></p>
+<p>🌁  你可以任意使用应用内默认主题或任意第三方主题，强大的主题自定义能力</p>
+<p>🖥  你可以自定义源文件夹，利用 OneDrive、百度网盘、iCloud、Dropbox 等进行多设备同步</p>
+<p>🌱 当然 <strong>Y73059</strong> 还很年轻，有很多不足，但请相信，它会不停向前 🏃</p>
+<p>未来，它一定会成为你离不开的伙伴</p>
+<p>尽情发挥你的才华吧！</p>
+<p>😘 Enjoy~</p>
+]]></content>
+    </entry>
+</feed>

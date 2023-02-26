@@ -1,0 +1,538 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>三 - K8S | Y73059</title>
+<link rel="shortcut icon" href="https://edison-lucky.github.io/favicon.ico?v=1677409976014">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://edison-lucky.github.io/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="三 - K8S | Y73059 - Atom Feed" href="https://edison-lucky.github.io/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="1.梳理k8s 各组件功能
+控制平面组件（Control Plane Components）
+kube-apiserver
+API 服务器是 Kubernetes 控制平面的组件， 该组件负责公开了 Kubernetes API，负责处理接..." />
+    <meta name="keywords" content="" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://edison-lucky.github.io">
+  <img class="avatar" src="https://edison-lucky.github.io/images/avatar.png?v=1677409976014" alt="">
+  </a>
+  <h1 class="site-title">
+    Y73059
+  </h1>
+  <p class="site-description">
+    Y73059
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="/post/about" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              三 - K8S
+            </h2>
+            <div class="post-info">
+              <span>
+                2023-02-26
+              </span>
+              <span>
+                12 min read
+              </span>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <h2 id="1梳理k8s-各组件功能">1.梳理k8s 各组件功能</h2>
+<h2 id="控制平面组件control-plane-components">控制平面组件（Control Plane Components）</h2>
+<h3 id="kube-apiserver">kube-apiserver</h3>
+<p>API 服务器是 Kubernetes 控制平面的组件， 该组件负责公开了 Kubernetes API，负责处理接受请求的工作。 API 服务器是 Kubernetes 控制平面的前端。<br>
+Kubernetes API 服务器的主要实现是 kube-apiserver。 kube-apiserver 设计上考虑了水平扩缩，也就是说，它可通过部署多个实例来进行扩缩。 你可以运行 kube-apiserver 的多个实例，并在这些实例之间平衡流量。</p>
+<h3 id="etcd">etcd</h3>
+<p>一致且高度可用的键值存储，用作 Kubernetes 的所有集群数据的后台数据库。<br>
+如果你的 Kubernetes 集群使用 etcd 作为其后台数据库， 请确保你针对这些数据有一份 备份计划。</p>
+<h3 id="kube-scheduler">kube-scheduler</h3>
+<p>kube-scheduler 是控制平面的组件， 负责监视新创建的、未指定运行节点（node）的 Pods， 并选择节点来让 Pod 在上面运行。<br>
+调度决策考虑的因素包括单个 Pod 及 Pods 集合的资源需求、软硬件及策略约束、 亲和性及反亲和性规范、数据位置、工作负载间的干扰及最后时限。</p>
+<h3 id="kube-controller-manager">kube-controller-manager</h3>
+<p>kube-controller-manager 是控制平面的组件， 负责运行控制器进程。<br>
+从逻辑上讲， 每个控制器都是一个单独的进程， 但是为了降低复杂性，它们都被编译到同一个可执行文件，并在同一个进程中运行。<br>
+这些控制器包括：</p>
+<ul>
+<li>节点控制器（Node Controller）：负责在节点出现故障时进行通知和响应</li>
+<li>任务控制器（Job Controller）：监测代表一次性任务的 Job 对象，然后创建 Pods 来运行这些任务直至完成</li>
+<li>端点分片控制器（EndpointSlice controller）：填充端点分片（EndpointSlice）对象（以提供 Service 和 Pod 之间的链接）。</li>
+<li>服务账号控制器（ServiceAccount controller）：为新的命名空间创建默认的服务账号（ServiceAccount）。</li>
+</ul>
+<h3 id="cloud-controller-manager">cloud-controller-manager</h3>
+<p>一个 Kubernetes 控制平面组件， 嵌入了特定于云平台的控制逻辑。 云控制器管理器（Cloud Controller Manager）允许你将你的集群连接到云提供商的 API 之上， 并将与该云平台交互的组件同与你的集群交互的组件分离开来。<br>
+cloud-controller-manager 仅运行特定于云平台的控制器。 因此如果你在自己的环境中运行 Kubernetes，或者在本地计算机中运行学习环境， 所部署的集群不需要有云控制器管理器。<br>
+与 kube-controller-manager 类似，cloud-controller-manager 将若干逻辑上独立的控制回路组合到同一个可执行文件中， 供你以同一进程的方式运行。 你可以对其执行水平扩容（运行不止一个副本）以提升性能或者增强容错能力。</p>
+<p>下面的控制器都包含对云平台驱动的依赖：</p>
+<ul>
+<li>节点控制器（Node Controller）：用于在节点终止响应后检查云提供商以确定节点是否已被删除</li>
+<li>路由控制器（Route Controller）：用于在底层云基础架构中设置路由</li>
+<li>服务控制器（Service Controller）：用于创建、更新和删除云提供商负载均衡器</li>
+</ul>
+<h2 id="node-组件">Node 组件</h2>
+<h3 id="kubelet">kubelet</h3>
+<p>kubelet 会在集群中每个节点（node）上运行。 它保证容器（containers）都运行在 Pod 中。<br>
+kubelet 接收一组通过各类机制提供给它的 PodSpecs， 确保这些 PodSpecs 中描述的容器处于运行状态且健康。 kubelet 不会管理不是由 Kubernetes 创建的容器。</p>
+<h3 id="kube-proxy">kube-proxy</h3>
+<p>kube-proxy 是集群中每个节点（node）上所运行的网络代理， 实现 Kubernetes 服务（Service） 概念的一部分。<br>
+kube-proxy 维护节点上的一些网络规则， 这些网络规则会允许从集群内部或外部的网络会话与 Pod 进行网络通信。<br>
+如果操作系统提供了可用的数据包过滤层，则 kube-proxy 会通过它来实现网络规则。 否则，kube-proxy 仅做流量转发。</p>
+<h3 id="容器运行时container-runtime">容器运行时（Container Runtime）</h3>
+<p>容器运行环境是负责运行容器的软件。<br>
+Kubernetes 支持许多容器运行环境，例如 containerd、 CRI-O 以及 Kubernetes CRI (容器运行环境接口) 的其他任何实现</p>
+<h2 id="2基本掌握containerd的安装和是使用">2.基本掌握containerd的安装和是使用</h2>
+<pre><code class="language-sh">参考文件: https://www.qikqiak.com/post/containerd-usage/
+apt-cache madison containerd
+apt install containerd
+
+whereis runc
+whereis containerd
+
+#默认containerd 安装路径
+mkdir /etc/containerd
+containerd config default &gt; /etc/containerd/config.toml
+
+#runc 验证环境
+runc -v
+
+
+#拉镜像
+ctr image pull docker.io/library/nginx:alpine
+
+列出本地镜像
+ctr image ls
+ctr image check
+
+
+重新打标签
+➜  ~ ctr image tag docker.io/library/nginx:alpine harbor.k8s.local/course/nginx:alpine
+harbor.k8s.local/course/nginx:alpine
+➜  ~ ctr image ls -q
+docker.io/library/nginx:alpine
+harbor.k8s.local/course/nginx:alpine
+
+
+#删除镜像
+➜  ~ ctr image rm harbor.k8s.local/course/nginx:alpine
+harbor.k8s.local/course/nginx:alpine
+➜  ~ ctr image ls -q
+docker.io/library/nginx:alpine
+
+#默认版本太旧可以做二进制更新
+
+</code></pre>
+<h2 id="3基于kubeadm和containerd部署单master-k8s-v124x">3.基于kubeadm和containerd部署单master k8s v1.24.x</h2>
+<pre><code class="language-sh">参考文件：https://www.cnblogs.com/xiaoyuzai09/p/16922661.html
+参考文件：https://blog.csdn.net/weixin_42173770/article/details/126178401
+
+cat &gt; /etc/sysctl.d/k8s.conf &lt;&lt;EOF
+net.bridge.bridge-nf-call-iptables=1
+net.bridge.bridge-nf-call-ip6tables=1
+net.bridge.bridge-nf-call-arptables = 1
+net.ipv4.ip_forward=1
+net.ipv4.tcp_tw_recycle=0
+net.core.somaxconn = 32768
+vm.swappiness=0 # 禁止使用 swap 空间，只有当系统 OOM 时才允许使用它 vm.overcommit_memory=1 # 不检查物理内存是否够用
+vm.panic_on_oom=0 # 开启 OOM
+fs.inotify.max_user_instances=8192
+fs.inotify.max_user_watches=1048576
+fs.file-max=52706963
+fs.nr_open=52706963
+net.ipv6.conf.all.disable_ipv6=1
+net.netfilter.nf_conntrack_max=2310720
+net.ipv4.conf.all.rp_filter = 1
+net.ipv4.neigh.default.gc_thresh1 = 80000
+net.ipv4.neigh.default.gc_thresh2 = 90000
+net.ipv4.neigh.default.gc_thresh3 = 100000
+EOF
+
+sysctl -p /etc/sysctl.d/k8s.conf
+
+modprobe overlay
+modprobe br_netfilter
+modprobe -- ip_vs
+modprobe -- ip_vs_rr
+modprobe -- ip_vs_wrr
+modprobe -- ip_vs_sh
+modprobe -- nf_conntrack
+
+临时关闭： swapoff -a
+#关闭swap
+sudo vi /etc/fstab
+#/swap.img      none    swap    sw      0       0
+
+#安装containerd
+apt-get update &amp;&amp; sudo apt-get install -y containerd
+mkdir -p /etc/containerd &amp;&amp; containerd config default | sudo tee /etc/containerd/config.toml
+
+systemctl enable containerd &amp;&amp; systemctl start containerd
+
+ctr -v #查看版本
+
+#安装配置 kubelet kubeadm kubectl
+apt update &amp;&amp; apt install apt-transport-https
+apt-add-repository &quot;deb http://apt.kubernetes.io/kubernetes-xenial main&quot;
+apt-get update
+apt-cache madison kubelet kubectl kubeadm |grep '1.24.2-00' 
+apt install -y kubelet=1.24.2-00 kubectl=1.24.2-00 kubeadm=1.24.2-00
+
+#master节点 初始化 sapiserver-advertise-address 填上本机IP
+kubeadm init --kubernetes-version=1.24.2  \
+ --apiserver-advertise-address=10.8.21.181  \
+ --service-cidr=10.200.0.0/16 --pod-network-cidr=10.122.0.0/16
+
+mkdir -p $HOME/.kube
+sudo cp -i /etc/kubernetes/admin.conf $HOME/.kube/config
+sudo chown $(id -u):$(id -g) $HOME/.kube/config
+</code></pre>
+<h2 id="4部署harbor并实现httpssan签发证书">4.部署harbor并实现https(SAN签发证书)</h2>
+<h3 id="生成证书">生成证书</h3>
+<pre><code class="language-sh">参考： https://blog.51cto.com/u_11239407/2921985
+
+比如生产证书域名：harbor.vmdchyi.xyz
+-----------------------------------------
+#生成证书颁发机构证书 
+openssl genrsa -out ca.key 4096
+
+
+openssl req -x509 -new -nodes -sha512 -days 3650 \ -subj &quot;/C=CN/ST=Shenzhen/L=Shenzhen/O=Harbor/OU=Harbor/CN=harbor.vmdchyi.xyz&quot; \ -key ca.key \ -out ca.crt 
+
+openssl req -x509 -new -nodes -sha512 -days 3650 -subj &quot;/C=CN/ST=Shenzhen/L=Shenzhen/O=Harbor/OU=Harbor/CN=harbor.vmdchyi.xyz&quot; -key ca.key -out ca.crt 
+
+-----------------------------------------
+#生成服务器证书 
+
+openssl genrsa -out harbor.vmdchyi.xyz.key 4096
+
+openssl req -sha512 -new -subj &quot;/C=CN/ST=Shenzhen/L=Shenzhen/O=Harbor/OU=Harbor/CN=harbor.vmdchyi.xyz&quot; -key harbor.vmdchyi.xyz.key -out harbor.vmdchyi.xyz.csr
+
+
+#证书签发SAN文件
+cat &gt; v3.ext &lt;&lt;-EOF
+authorityKeyIdentifier=keyid,issuer
+basicConstraints=CA:FALSE
+keyUsage = digitalSignature, nonRepudiation, keyEncipherment, dataEncipherment
+extendedKeyUsage = serverAuth
+subjectAltName = @alt_names
+
+[alt_names]
+DNS.1=harbor.vmdchyi.xyz
+DNS.2=harbor.vmdchyi.xyz.local
+EOF
+
+#自签发harbor证书
+openssl x509 -req -sha512 -days 3650 -extfile v3.ext -CA ca.crt -CAkey ca.key -CAcreateserial -in harbor.vmdchyi.xyz.csr -out harbor.vmdchyi.xyz.crt
+-----------------------------------------
+提供证书给Harbor和Docker
+openssl x509 -inform PEM -in harbor.vmdchyi.xyz.crt -out harbor.vmdchyi.xyz.cert
+</code></pre>
+<h3 id="配置harbor">配置harbor</h3>
+<pre><code class="language-sh">#下载
+wget https://github.com/goharbor/harbor/releases/download/v2.6.2/harbor-offline-installer-v2.6.2.tgz
+
+#安装harbor
+wget https://github.com/goharbor/harbor/releases/download/v2.6.2/harbor-offline-installer-v2.6.2.tgz
+tar xf harbor-offline-installer-v2.6.2.tgz
+cd harbor 
+
+
+#刚才生成的证书复制
+mkdir -p /opt/harbor/cert
+cp harbor.vmdchyi.xyz.crt /opt/harbor/cert
+cp harbor.vmdchyi.xyz.key /opt/harbor/cert
+
+
+#配置 harbor
+$ cd /opt/harbor
+$ cp harbor.yml.tmpl harbor.yml
+# 修改配置文件
+$ vi harbor.yml
+...
+...
+...
+hostname: xxxxx.com
+https:
+ port: 443
+ certificate: /opt/harbor/cert/harbor.vmdchyi.xyz.crt 
+private_key: /opt/harbor/cert/harbor.vmdchyi.xyz.key
+external_url: https://harbor.vmdchyi.xyz
+...
+...
+...
+#安装启动
+运行 prepare 脚本以启用 HTTPS
+./prepare
+
+#开始安装
+./install.sh
+
+#harbor的停止与启动
+$ cd harbor
+$ docker-compose stop # 停止
+$ docker-compose start # 启动(第一次需要使用 up -d)
+$ docker-compose down # 停止并删除容器（慎用）
+$ docker-compose up -d # 创建并启动
+
+</code></pre>
+<h2 id="5部署haproxy和keepalived高可用负载均衡">5.部署haproxy和keepalived高可用负载均衡</h2>
+<pre><code class="language-sh">
+10.8.21.133 vip
+
+#lb1 服务器  
+10.8.21.181 lb1
+10.8.21.182 lb2
+
+#机器服务器
+10.8.21.191
+10.8.21.192
+10.8.21.193
+
+apt install -y keepalived
+cp /usr/share/doc/keepalived/samples/keepalived.conf.vrrp /etc/keepalived/keepalived.conf
+
+
+#virtual_ipaddress 是服务对象
+
+#####Master -lb1 - 10.8.21.181
+! Configuration File for keepalived
+global_defs {
+   notification_email {
+     acassen
+   }
+   notification_email_from Alexandre.Cassen@firewall.loc
+   smtp_server 192.168.200.1
+   smtp_connect_timeout 30
+   router_id LVS_DEVEL
+}
+vrrp_instance VI_1 {
+    state MASTER
+    interface eth0
+    garp_master_delay 10
+    smtp_alert
+    virtual_router_id 51
+    priority 100
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 1111
+    }
+    virtual_ipaddress {
+        10.8.21.133
+    }
+}
+
+#####备用 Backup -lb2 -- 10.8.21.182
+! Configuration File for keepalived
+global_defs {
+   notification_email {
+     acassen
+   }
+   notification_email_from Alexandre.Cassen@firewall.loc
+   smtp_server 192.168.200.1
+   smtp_connect_timeout 30
+   router_id LVS_DEVEL
+}
+vrrp_instance VI_1 {
+    state BACKUP
+    interface eth0
+    garp_master_delay 10
+    smtp_alert
+    virtual_router_id 51
+    priority 98
+    advert_int 1
+    authentication {
+        auth_type PASS
+        auth_pass 1111
+    }
+    virtual_ipaddress {
+        10.8.21.133
+    }
+}
+
+systemctl start keepalived
+systemctl enable keepalived
+
+
+apt install -y haproxy 
+
+#lb1 服务器  
+vim /etc/haproxy/haproxy.cfg
+
+listen web
+  bind 10.8.21.181
+  mode tcp 
+  server server1 10.8.21.191:6443 check
+  server server2 10.8.21.192:6443 check
+  server server3 10.8.21.193:6443 check
+
+
+
+#lb2 服务器  
+vim /etc/haproxy/haproxy.cfg
+
+listen web
+  bind 10.8.21.182
+  mode tcp 
+  server server1 10.8.21.191:6443 check
+  server server2 10.8.21.192:6443 check
+  server server3 10.8.21.193:6443 check
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li><a href="#1%E6%A2%B3%E7%90%86k8s-%E5%90%84%E7%BB%84%E4%BB%B6%E5%8A%9F%E8%83%BD">1.梳理k8s 各组件功能</a></li>
+<li><a href="#%E6%8E%A7%E5%88%B6%E5%B9%B3%E9%9D%A2%E7%BB%84%E4%BB%B6control-plane-components">控制平面组件（Control Plane Components）</a>
+<ul>
+<li><a href="#kube-apiserver">kube-apiserver</a></li>
+<li><a href="#etcd">etcd</a></li>
+<li><a href="#kube-scheduler">kube-scheduler</a></li>
+<li><a href="#kube-controller-manager">kube-controller-manager</a></li>
+<li><a href="#cloud-controller-manager">cloud-controller-manager</a></li>
+</ul>
+</li>
+<li><a href="#node-%E7%BB%84%E4%BB%B6">Node 组件</a>
+<ul>
+<li><a href="#kubelet">kubelet</a></li>
+<li><a href="#kube-proxy">kube-proxy</a></li>
+<li><a href="#%E5%AE%B9%E5%99%A8%E8%BF%90%E8%A1%8C%E6%97%B6container-runtime">容器运行时（Container Runtime）</a></li>
+</ul>
+</li>
+<li><a href="#2%E5%9F%BA%E6%9C%AC%E6%8E%8C%E6%8F%A1containerd%E7%9A%84%E5%AE%89%E8%A3%85%E5%92%8C%E6%98%AF%E4%BD%BF%E7%94%A8">2.基本掌握containerd的安装和是使用</a></li>
+<li><a href="#3%E5%9F%BA%E4%BA%8Ekubeadm%E5%92%8Ccontainerd%E9%83%A8%E7%BD%B2%E5%8D%95master-k8s-v124x">3.基于kubeadm和containerd部署单master k8s v1.24.x</a></li>
+<li><a href="#4%E9%83%A8%E7%BD%B2harbor%E5%B9%B6%E5%AE%9E%E7%8E%B0httpssan%E7%AD%BE%E5%8F%91%E8%AF%81%E4%B9%A6">4.部署harbor并实现https(SAN签发证书)</a>
+<ul>
+<li><a href="#%E7%94%9F%E6%88%90%E8%AF%81%E4%B9%A6">生成证书</a></li>
+<li><a href="#%E9%85%8D%E7%BD%AEharbor">配置harbor</a></li>
+</ul>
+</li>
+<li><a href="#5%E9%83%A8%E7%BD%B2haproxy%E5%92%8Ckeepalived%E9%AB%98%E5%8F%AF%E7%94%A8%E8%B4%9F%E8%BD%BD%E5%9D%87%E8%A1%A1">5.部署haproxy和keepalived高可用负载均衡</a></li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://edison-lucky.github.io/post/er-docker/">
+              <h3 class="post-title">
+                二 ：Docker
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="edison-lucky.github.io" target="_blank">Y73059</a>
+  <a class="rss" href="https://edison-lucky.github.io/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

@@ -1,0 +1,736 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>五 - K8S | Y73059</title>
+<link rel="shortcut icon" href="https://edison-lucky.github.io/favicon.ico?v=1677409976014">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://edison-lucky.github.io/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="五 - K8S | Y73059 - Atom Feed" href="https://edison-lucky.github.io/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="1.实现基于velero对etcd的单独namespace的备份和恢复
+
+
+先安装minio
+docker run -d -p 9000:9000 -p 9090:9090 --name minio1 \
+  -e &quot;MINIO_..." />
+    <meta name="keywords" content="" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://edison-lucky.github.io">
+  <img class="avatar" src="https://edison-lucky.github.io/images/avatar.png?v=1677409976014" alt="">
+  </a>
+  <h1 class="site-title">
+    Y73059
+  </h1>
+  <p class="site-description">
+    Y73059
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="/post/about" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              五 - K8S
+            </h2>
+            <div class="post-info">
+              <span>
+                2023-02-26
+              </span>
+              <span>
+                15 min read
+              </span>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <h2 id="1实现基于velero对etcd的单独namespace的备份和恢复">1.实现基于velero对etcd的单独namespace的备份和恢复</h2>
+<ol>
+<li>
+<p>先安装minio</p>
+<pre><code class="language-sh">docker run -d -p 9000:9000 -p 9090:9090 --name minio1 \
+  -e &quot;MINIO_ROOT_USER=admin&quot; \
+  -e &quot;MINIO_ROOT_PASSWORD=12345678&quot; \
+  -v /mnt/data:/data \
+  --restart=always \
+  minio/minio server /data --console-address ':9090'
+  
+
+访问页minio 创建bucket 名称为 velerodata
+http://192.168.25.229:9090/
+</code></pre>
+</li>
+<li>
+<p>部署 velero</p>
+<pre><code class="language-sh">#在master节点部署 velero
+mkdir -p /data/velero
+
+# 访问minio的认证文件，minio用户名与配置
+cat &gt;&gt; velero-auth.txt &lt;&lt;EOF
+[default]
+aws_access_key_id = admin
+aws_secret_access_key = 12345678
+EOF
+ 
+# 准备user-csr文件，用于访问k8s；也可直接使用/root/.kube/config文件
+cat &gt;&gt;awsuser-csr.json &lt;&lt;EOF
+{
+  &quot;CN&quot;: &quot;awsuser&quot;,
+  &quot;hosts&quot;: [],
+  &quot;key&quot;: {
+    &quot;algo&quot;: &quot;rsa&quot;,
+    &quot;size&quot;: 2048
+  },
+  &quot;names&quot;: [
+    {
+      &quot;C&quot;: &quot;CN&quot;,
+      &quot;ST&quot;: &quot;BeiJing&quot;,
+      &quot;L&quot;: &quot;BeiJing&quot;,
+      &quot;O&quot;: &quot;k8s&quot;,
+      &quot;OU&quot;: &quot;System&quot;
+    }
+  ]
+}
+EOF
+
+wget https://github.com/vmware-tanzu/velero/releases/download/v1.8.1/velero-v1.8.1-linux-amd64.tar.gz
+tar xvf velero-v1.8.1-linux-amd64.tar.gz 
+cp velero-v1.8.1-linux-amd64/velero  /usr/local/bin/
+velero --help
+
+wget https://github.com/cloudflare/cfssl/releases/download/v1.6.1/cfssl_1.6.1_linux_amd64 
+wget https://github.com/cloudflare/cfssl/releases/download/v1.6.1/cfssljson_1.6.1_linux_amd64 
+wget https://github.com/cloudflare/cfssl/releases/download/v1.6.1/cfssl-certinfo_1.6.1_linux_amd64
+
+mv cfssl-certinfo_1.6.1_linux_amd64 cfssl-certinfo
+mv cfssl_1.6.1_linux_amd64 cfssl
+mv cfssljson_1.6.1_linux_amd64 cfssljson
+cp cfssl-certinfo cfssl cfssljson /usr/local/bin/
+chmod a+x /usr/local/bin/cfssl* 
+
+</code></pre>
+</li>
+<li>
+<p>签发证书</p>
+<pre><code class="language-sh">cd /data/velero
+# 从部署deploy服务器复制ca-config.json文件
+scp 192.168.25.229:/etc/kubeasz/clusters/k8s-cluster1/ssl/ca-config.json /data/velero/ca-config.json
+ 
+# 执行证书签发
+/usr/local/bin/cfssl gencert \
+-ca=/etc/kubernetes/ssl/ca.pem \
+-ca-key=/etc/kubernetes/ssl/ca-key.pem \
+-config=./ca-config.json \
+-profile=kubernetes \
+./awsuser-csr.json | cfssljson -bare awsuser
+
+</code></pre>
+</li>
+<li>
+<p>配置客户端认证</p>
+<pre><code class="language-sh">#分发证书到api-server证书路径
+cp awsuser-key.pem /etc/kubernetes/ssl/
+cp awsuser.pem /etc/kubernetes/ssl/
+ 
+#生成集群认证config文件
+export KUBE_APISERVER=&quot;https://192.168.25.230:6443&quot;
+kubectl config set-cluster kubernetes \
+--certificate-authority=/etc/kubernetes/ssl/ca.pem \
+--embed-certs=true \
+--server=${KUBE_APISERVER} \
+--kubeconfig=./awsuser.kubeconfig
+ 
+ 
+#设置客户端证书认证
+kubectl config set-credentials awsuser \
+--client-certificate=/etc/kubernetes/ssl/awsuser.pem \
+--client-key=/etc/kubernetes/ssl/awsuser-key.pem \
+--embed-certs=true \
+--kubeconfig=./awsuser.kubeconfig
+ 
+#设置上下文参数
+kubectl config set-context kubernetes \
+--cluster=kubernetes \
+--user=awsuser \
+--namespace=velero-system \
+--kubeconfig=./awsuser.kubeconfig
+ 
+#设置默认上下文
+kubectl config use-context kubernetes --kubeconfig=awsuser.kubeconfig
+
+查看awsuser.kubeconfig​文件
+</code></pre>
+</li>
+<li>
+<p>创建用户</p>
+<pre><code class="language-sh">#k8s集群中创建awsuser账户
+kubectl create clusterrolebinding awsuser --clusterrole=cluster-admin --user=awsuser
+
+#创建namespace
+kubectl create ns velero-system
+</code></pre>
+</li>
+<li>
+<p>安装velero</p>
+<pre><code class="language-sh"># 执行安装
+velero --kubeconfig  ./awsuser.kubeconfig \	#连接k8s认证文件
+install \					#安装
+--provider aws \				#连接k8s用户
+--plugins velero/velero-plugin-for-aws:v1.3.1 \	#velero镜像
+--bucket velerodata  \				#minio bucket名称
+--secret-file ./velero-auth.txt \		#连接minio认证文件
+--use-volume-snapshots=false \			#是否使用快照
+--namespace velero-system \			#namespace名称
+--backup-location-config region=minio,s3ForcePathStyle=&quot;true&quot;,s3Url=http://192.168.25.229:9000	#minio地址
+ 
+ velero --kubeconfig  ./awsuser.kubeconfig \
+install \
+--provider aws \
+--plugins velero/velero-plugin-for-aws:v1.3.1 \
+--bucket velerodata  \
+--secret-file ./velero-auth.txt \
+--use-volume-snapshots=false \
+--namespace velero-system \
+--backup-location-config region=minio,s3ForcePathStyle=&quot;true&quot;,s3Url=http://192.168.25.229:9000
+ 
+ 查看
+ kubectl get pod -n velero-system
+ 
+ 确保日志没有报错
+ kubectl logs velero-54d99f4c8d-rvf2f -n velero-system
+ velero backup describe myserver4-ns-backup-20230223070730 -n velero-system
+</code></pre>
+</li>
+<li>
+<p>备份</p>
+<pre><code class="language-sh">#新创建myserver 名称空间 和pod 测试用
+# 按当前日前对myserver namespace进行备份
+DATE=`date +%Y%m%d%H%M%S`
+ 
+#备份指定名称空间
+velero backup create myserver-ns-backup-${DATE} \
+--include-namespaces myserver \
+--kubeconfig=/data/velero/awsuser.kubeconfig \
+--namespace velero-system
+
+#备份指定pod
+velero backup create pod-backup-01 \
+--include-cluster-resources=true \
+--ordered-resources 'pods=myserver/test-pod' \
+--namespace velero-system \
+--include-namespaces=myserver
+
+#批量备份所有namespace
+#!/bin/bash
+DATE=`date +%Y%m%d%H%M%S`
+NS_NAME=`kubectl get ns|awk 'NR&gt;1{print $1}'`
+for NAME in ${NS_NAME};do
+	velero backup create ${NAME}-ns-backup-${DATE} \
+--include-namespaces ${NAME} \
+--kubeconfig=/data/velero/awsuser.kubeconfig \
+--namespace velero-system
+done
+</code></pre>
+</li>
+<li>
+<p>恢复</p>
+<pre><code class="language-sh">#测试删除
+kubectl delete pod test-pod -n myserver
+
+#执行恢复
+velero restore create --from-backup myserver4-ns-backup-20230223070730 --wait \
+--kubeconfig=/data/velero/awsuser.kubeconfig \
+--namespace velero-system
+</code></pre>
+</li>
+</ol>
+<h2 id="2掌握k8s中常见的资源对象的使用">2.掌握k8s中常见的资源对象的使用：</h2>
+<h2 id="deployment">deployment</h2>
+<pre><code class="language-sh">apiVersion: apps/v1 # API群组及版本
+kind: Deployment # 资源类型特有标识
+metadata:
+ name &lt;string&gt; # 资源名称，在作用域中要唯一
+ namespace &lt;string&gt; # 名称空间；Deployment隶属名称空间级别
+spec:
+ minReadySeconds &lt;integer&gt; # Pod就绪后多少秒内任一容器无crash方可视为“就绪”
+ replicas &lt;integer&gt; # 期望的Pod副本数，默认为1
+ selector &lt;object&gt; # 标签选择器，必须匹配template字段中Pod模板中的标签
+ template &lt;object&gt; # Pod模板对象
+
+ revisionHistoryLimit &lt;integer&gt; # 滚动更新历史记录数量，默认为10
+ strategy &lt;Object&gt; # 滚动更新策略
+ type &lt;string&gt; # 滚动更新类型，可用值有Recreate和RollingUpdate；
+ rollingUpdate &lt;Object&gt; # 滚动更新参数，专用于RollingUpdate类型
+ maxSurge &lt;string&gt; # 更新期间可比期望的Pod数量多出的数量或比例；
+ maxUnavailable &lt;string&gt; # 更新期间可比期望的Pod数量缺少的数量或比例，10， 
+progressDeadlineSeconds &lt;integer&gt; # 滚动更新故障超时时长，默认为600秒
+ paused &lt;boolean&gt; # 是否暂停部署过程
+</code></pre>
+<h2 id="service">service</h2>
+<p>Service代理模式：<br>
+kube-proxy如何确保service能正常工作；<br>
+Userspace<br>
+iptables<br>
+ipvs</p>
+<p>Service的类型<br>
+ClusterIP：通过集群内部IP地址暴露服务，但该地址仅在集群内部可见、可达，它无法被集群外部的客户端访问；默认类型；<br>
+NodePort：NodePort是ClusterIP的增强类型，它会于ClusterIP的功能之外，在每个节点上使用一个相同的端口号将外部流量引入到该Service上来。<br>
+LoadBalancer：LB是NodePort的增强类型，要借助于底层IaaS云服务上的LBaaS产品来按需管理LoadBalancer。<br>
+ExternalName：借助集群上KubeDNS来实现，服务的名称会被解析为一个CNAME记录，而CNAME名称会被DNS解析为集群外部的服务的IP地址； 这种Service既不会有ClusterIP，也不会有NodePort；</p>
+<p>ClusterIP：建议由K8S动态指定一个； 也支持用户手动明确指定；<br>
+ServicePort：被映射进Pod上的应用程序监听的端口； 而且如果后端Pod有多个端口，并且每个端口都想通过SErvice暴露的话，每个都要单独定义。<br>
+最终接收请求的是PodIP和containerPort；</p>
+<pre><code class="language-sh">#Service资源的定义格式，名称空间级别的资源：
+apiVersion: v1
+kind: Service
+metadata:
+  name: …
+  namespace: …
+  labels:
+    key1: value1
+    key2: value2
+spec:
+  type &lt;string&gt;   # Service类型，默认为ClusterIP
+  selector &lt;map[string]string&gt;  # 等值类型的标签选择器，内含“与”逻辑
+  ports：  # Service的端口对象列表
+  - name &lt;string&gt;  # 端口名称
+    protocol &lt;string&gt;  # 协议，目前仅支持TCP、UDP和SCTP，默认为TCP
+    port &lt;integer&gt;  # Service的端口号
+    targetPort  &lt;string&gt;  # 后端目标进程的端口号或名称，名称需由Pod规范定义
+    nodePort &lt;integer&gt;  # 节点端口号，仅适用于NodePort和LoadBalancer类型
+  clusterIP  &lt;string&gt;  # Service的集群IP，建议由系统自动分配
+  externalTrafficPolicy  &lt;string&gt; # 外部流量策略处理方式，Local表示由当前节点处理，Cluster表示向集群范围调度
+  loadBalancerIP  &lt;string&gt;  # 外部负载均衡器使用的IP地址，仅适用于LoadBlancer
+  externalName &lt;string&gt;  # 外部服务名称，该名称将作为Service的DNS CNAME值
+</code></pre>
+<h2 id="configmap">configmap</h2>
+<p>创建configmap</p>
+<pre><code class="language-sh">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: configmap-test
+data:
+  # 类属性键；每一个键都映射到一个简单的值
+  property_1: Hello
+  property_2: World
+</code></pre>
+<p>在Volume中引用ConfigMap</p>
+<pre><code class="language-sh">apiVersion: v1
+kind: Pod
+metadata:
+  name: nginx-volume
+spec:
+  containers:
+  - image: nginx:1.16.1
+    name: container-0
+    resources:
+      limits:
+        cpu: 100m
+        memory: 200Mi
+      requests:
+        cpu: 100m
+        memory: 200Mi
+    volumeMounts:
+    - name: vol-configmap		# 挂载名为vol-configmap的Volume
+      mountPath: &quot;/tmp&quot;
+  imagePullSecrets:
+  - name: default-secret
+  volumes:
+  # 你可以在 Pod 级别设置卷，然后将其挂载到 Pod 内的容器中
+  - name: vol-configmap
+    configMap:				# 引用ConfigMap
+      # 提供想要挂载的 ConfigMap 的名字
+      name: configmap-test
+      # 来自 ConfigMap 的一组键，将被创建为文件，如果不配置items，则 ConfigMap 中的每个键都会变成一个与该键同名的文件。path为挂载点名称，key为文件内容
+      items:
+      - key: property_1
+        path: p1
+      - key: property_2
+        path: p2
+
+</code></pre>
+<h2 id="secret">secret</h2>
+<p>Secret资源，使用环境变量</p>
+<pre><code class="language-sh">containers:
+- name: …
+  image: …
+  env:
+  - name: &lt;string&gt;       # 变量名，其值来自于某Secret对象上的指定键的值；
+    valueFrom:            # 键值引用； 
+      secretKeyRef:       
+        name: &lt;string&gt;    # 引用的Secret对象的名称，需要与该Pod位于同一名称空间；
+        key: &lt;string&gt;     # 引用的Secret对象上的键，其值将传递给环境变量；
+        optional: &lt;boolean&gt; # 是否为可选引用；
+  envFrom:                 # 整体引用指定的Secret对象的全部键名和键值；
+  - prefix: &lt;string&gt;     # 将所有键名引用为环境变量时统一添加的前缀；
+secretRef:        
+  name: &lt;string&gt;     # 引用的Secret对象名称；
+  optional: &lt;boolean&gt; # 是否为可选引用；
+</code></pre>
+<h2 id="3掌握基于nfs实现pod数据持久化的使用方式测试emptydir-hostpath的使用">3.掌握基于NFS实现pod数据持久化的使用方式，测试emptyDir、hostPath的使用</h2>
+<h3 id="nfs-dynamic">NFS  - Dynamic</h3>
+<pre><code class="language-sh">#nfs server 安装
+
+yum install nfs-utils
+systemctl enable rpcbind
+systemctl enable nfs
+systemctl start rpcbind
+systemctl start nfs
+
+mkdir /data
+chmod 755 /data
+
+#配置共享目录
+vi /etc/exports
+/data/     192.168.0.0/24(rw,sync,no_root_squash,no_all_squash)
+
+
+#在集群的其中一台服务器helm 后，使用operator 的方式安装
+#添加helm源
+helm repo add nfs-subdir-external-provisioner https://kubernetes-sigs.github.io/nfs-subdir-external-provisioner
+
+#创建个namespace(可选，主要是为了查看资源方便)
+kubectl create ns nfs-sc-default
+
+#使用helm安装(10.1.129.86为NFS地址，/data/nfs-data为共享的目录)
+helm install nfs-subdir-external-provisioner nfs-subdir-external-provisioner/nfs-subdir-external-provisioner \
+    --set storageClass.name=nfs-sc-default	#指定sc的名字
+    --set nfs.server=10.1.129.86 \					#指定nfs地址
+    --set nfs.path=/data/nfs-data \					#指定nfs的共享目录
+    --set storageClass.defaultClass=true \	#指定为默认sc
+    -n nfs-sc-default												#指定命名空间
+
+#查看创建的sc
+kubectl get sc
+
+</code></pre>
+<h3 id="emptydir">emptyDir</h3>
+<p>当 Pod 因为某些原因被从节点上删除时，emptyDir 卷中的数据也会被永久删除。</p>
+<pre><code class="language-sh">apiVersion: v1
+kind: Pod
+metadata:
+  name: emptydir-pd
+spec:
+  containers:
+  - image: nginx:1.16.1
+    name: test-container
+    volumeMounts:
+    - mountPath: /cache
+      name: cache-volume
+  volumes:
+  - name: cache-volume
+    emptyDir:
+      sizeLimit: 100Mi
+	  
+# 进入容器创建emptpydir-test文件
+kubectl exec -it emptydir-pd bash
+echo 'emptydir-pod' &gt;&gt; /cache/emptpydir-test	   
+
+# 进入宿主机，查看emptpydir-test文件内容
+find / -name emptpydir-test
+</code></pre>
+<h3 id="hostpath">hostPath</h3>
+<pre><code class="language-sh">apiVersion: v1
+kind: Pod
+metadata:
+  name: hostpath-pd
+spec:
+  containers:
+  - image: nginx:1.16.1
+    name: test-container
+    volumeMounts:
+    - mountPath: /hostpath-pd
+      name: hostpath-volume
+  volumes:
+  - name: hostpath-volume
+    hostPath:
+      path: /data
+	  
+# 进入容器，创建hostpath-test文件
+kubectl exec -it hostpath-pd bash
+echo 'hostpath' &gt;&gt; /hostpath-pd/hostpath-test
+
+# 进入宿主机，查看hostpath-test文件内容
+cat /data/hostpath-test 
+</code></pre>
+<h2 id="4实现基于secret实现nginx的tls认证-并实现私有仓库镜像的下载认证">4.实现基于Secret实现nginx的tls认证、并实现私有仓库镜像的下载认证</h2>
+<ol>
+<li>
+<p>tls认证 secret</p>
+<pre><code class="language-sh">#创建证书
+mkdir -p /data/certs
+
+cd /data/certs
+openssl req -x509 -sha256 -newkey rsa:4096 -keyout ca.key -out ca.crt -days 3560 -nodes -subj '/CN=www.ca.com'
+openssl req -new -newkey rsa:4096 -keyout server.key -out server.csr -nodes -subj '/CN=www.mysite.com'
+openssl x509 -req -sha256 -days 3650 -in server.csr -CA ca.crt -CAkey ca.key -set_serial 01 -out server.crt
+
+# 创建secret
+kubectl create secret tls myserver-tls-key --cert=./server.crt --key=./server.key -n myserver
+
+#查看
+kubectl get secret -n myserver
+kubectl describe secret myserver-tls-key -n myserver
+</code></pre>
+<ol start="2">
+<li>私有仓库sercet</li>
+</ol>
+</li>
+</ol>
+<pre><code class="language-sh">#在docker hub创建使用账号，使用docker认证文件创建 
+#推动镜像到 dockerhub 仓库名为 edison626/nginx-test:1.20.1
+# 登录私有仓库，登录成功后，认证信息保存至/root/.docker/config.json文件
+docker login #docker hub 账号
+
+# 创建secret
+kubectl create secret generic dockerhub-registry-image-pull-key \
+--from-file=.dockerconfigjson=/root/.docker/config.json \
+--type=kubernetes.io/dockerconfigjson \
+-n myserver
+
+</code></pre>
+<ol start="3">
+<li>
+<h4 id="生成yaml-并运行">生成yaml 并运行</h4>
+</li>
+</ol>
+<pre><code class="language-sh">apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: nginx-config
+  namespace: myserver
+data:
+  default: |
+    server {
+      listen  80;
+      listen  443 ssl;
+      server_name     www.mysite.com;
+      ssl_certificate         /etc/nginx/conf.d/certs/tls.crt;
+      ssl_certificate_key     /etc/nginx/conf.d/certs/tls.key;
+      location / {
+          root  /usr/share/nginx/html;
+          index index.html index.htm;
+          if ($scheme = http) {
+              rewrite / https://www.mysite.com permanent;
+          }
+          #if (-e $request_filename) {
+          #    rewrite ^/(.*) /index.html last;
+          #}
+      }
+    }
+ 
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: myserver-nginx-deploy
+  namespace: myserver
+  labels:
+    app: myserver-nginx-deploy
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: myserver-nginx
+  template:
+    metadata:
+      labels:
+        app: myserver-nginx
+    spec:
+      containers:
+      - name: myserver-nginx
+        image: edison626/nginx-test:1.20.1 #dockerhub 私有仓库
+        ports:
+          - containerPort: 80
+        volumeMounts:
+          - name: nginx-config
+            mountPath: /etc/nginx/conf.d
+          - name: myserver-tls-key                 #在容器里配置证书文件
+            mountPath: /etc/nginx/conf.d/certs     #证书路径
+      volumes:
+      - name: nginx-config	
+        configMap:
+          name: nginx-config
+          items:
+            - key: default		
+              path: mysite.conf	
+      - name: myserver-tls-key
+        secret:	
+          secretName: myserver-tls-key	#证书秘钥
+      imagePullSecrets:
+        - name: dockerhub-registry-image-pull-key  #dockerhub secret 秘钥		   
+ 
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: nmyserver-nginx-service
+  namespace: myserver
+spec:
+  type: NodePort
+  selector:
+    app: myserver-nginx
+  ports:
+    - name: http		
+      protocol: TCP		
+      port: 80				
+      targetPort: 80		
+      nodePort: 30019		
+    - name: https	
+      protocol: TCP
+      port: 443
+      targetPort: 443
+      nodePort: 30020
+	  
+#检查
+- 镜像是否能正常拉取
+- 访问端口30020 查看证书状态
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li><a href="#1%E5%AE%9E%E7%8E%B0%E5%9F%BA%E4%BA%8Evelero%E5%AF%B9etcd%E7%9A%84%E5%8D%95%E7%8B%ACnamespace%E7%9A%84%E5%A4%87%E4%BB%BD%E5%92%8C%E6%81%A2%E5%A4%8D">1.实现基于velero对etcd的单独namespace的备份和恢复</a></li>
+<li><a href="#2%E6%8E%8C%E6%8F%A1k8s%E4%B8%AD%E5%B8%B8%E8%A7%81%E7%9A%84%E8%B5%84%E6%BA%90%E5%AF%B9%E8%B1%A1%E7%9A%84%E4%BD%BF%E7%94%A8">2.掌握k8s中常见的资源对象的使用：</a></li>
+<li><a href="#deployment">deployment</a></li>
+<li><a href="#service">service</a></li>
+<li><a href="#configmap">configmap</a></li>
+<li><a href="#secret">secret</a></li>
+<li><a href="#3%E6%8E%8C%E6%8F%A1%E5%9F%BA%E4%BA%8Enfs%E5%AE%9E%E7%8E%B0pod%E6%95%B0%E6%8D%AE%E6%8C%81%E4%B9%85%E5%8C%96%E7%9A%84%E4%BD%BF%E7%94%A8%E6%96%B9%E5%BC%8F%E6%B5%8B%E8%AF%95emptydir-hostpath%E7%9A%84%E4%BD%BF%E7%94%A8">3.掌握基于NFS实现pod数据持久化的使用方式，测试emptyDir、hostPath的使用</a>
+<ul>
+<li><a href="#nfs-dynamic">NFS  - Dynamic</a></li>
+<li><a href="#emptydir">emptyDir</a></li>
+<li><a href="#hostpath">hostPath</a></li>
+</ul>
+</li>
+<li><a href="#4%E5%AE%9E%E7%8E%B0%E5%9F%BA%E4%BA%8Esecret%E5%AE%9E%E7%8E%B0nginx%E7%9A%84tls%E8%AE%A4%E8%AF%81-%E5%B9%B6%E5%AE%9E%E7%8E%B0%E7%A7%81%E6%9C%89%E4%BB%93%E5%BA%93%E9%95%9C%E5%83%8F%E7%9A%84%E4%B8%8B%E8%BD%BD%E8%AE%A4%E8%AF%81">4.实现基于Secret实现nginx的tls认证、并实现私有仓库镜像的下载认证</a><br>
+*
+<ul>
+<li><a href="#%E7%94%9F%E6%88%90yaml-%E5%B9%B6%E8%BF%90%E8%A1%8C">生成yaml 并运行</a></li>
+</ul>
+</li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://edison-lucky.github.io/post/si-k8s/">
+              <h3 class="post-title">
+                四 - K8S
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="edison-lucky.github.io" target="_blank">Y73059</a>
+  <a class="rss" href="https://edison-lucky.github.io/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>

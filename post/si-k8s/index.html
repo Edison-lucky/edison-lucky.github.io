@@ -1,0 +1,346 @@
+<html>
+  <head>
+    <meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>四 - K8S | Y73059</title>
+<link rel="shortcut icon" href="https://edison-lucky.github.io/favicon.ico?v=1677409976014">
+<link href="https://cdn.jsdelivr.net/npm/remixicon@2.3.0/fonts/remixicon.css" rel="stylesheet">
+<link rel="stylesheet" href="https://edison-lucky.github.io/styles/main.css">
+<link rel="alternate" type="application/atom+xml" title="四 - K8S | Y73059 - Atom Feed" href="https://edison-lucky.github.io/atom.xml">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Droid+Serif:400,700">
+
+
+
+    <meta name="description" content="1.kubernetes高可用集群二进制部署
+升级kubernetes
+server
+#server 包
+https://dl.k8s.io/v1.26.1/kubernetes-server-linux-amd64.tar.gz
+#在ma..." />
+    <meta name="keywords" content="" />
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.10.0/katex.min.css">
+    <script src="//cdn.jsdelivr.net/gh/highlightjs/cdn-release@11.5.1/build/highlight.min.js"></script>
+  </head>
+  <body>
+    <div class="main">
+      <div class="main-content">
+        <div class="site-header">
+  <a href="https://edison-lucky.github.io">
+  <img class="avatar" src="https://edison-lucky.github.io/images/avatar.png?v=1677409976014" alt="">
+  </a>
+  <h1 class="site-title">
+    Y73059
+  </h1>
+  <p class="site-description">
+    Y73059
+  </p>
+  <div class="menu-container">
+    
+      
+        <a href="/" class="menu">
+          首页
+        </a>
+      
+    
+      
+        <a href="/archives" class="menu">
+          归档
+        </a>
+      
+    
+      
+        <a href="/tags" class="menu">
+          标签
+        </a>
+      
+    
+      
+        <a href="/post/about" class="menu">
+          关于
+        </a>
+      
+    
+  </div>
+  <div class="social-container">
+    
+      
+    
+      
+    
+      
+    
+      
+    
+      
+    
+  </div>
+</div>
+
+        <div class="post-detail">
+          <article class="post">
+            <h2 class="post-title">
+              四 - K8S
+            </h2>
+            <div class="post-info">
+              <span>
+                2023-02-26
+              </span>
+              <span>
+                5 min read
+              </span>
+              
+            </div>
+            
+            <div class="post-content-wrapper">
+              <div class="post-content" v-pre>
+                <h2 id="1kubernetes高可用集群二进制部署">1.kubernetes高可用集群二进制部署</h2>
+<h2 id="升级kubernetes">升级kubernetes</h2>
+<h3 id="server">server</h3>
+<pre><code class="language-sh">#server 包
+https://dl.k8s.io/v1.26.1/kubernetes-server-linux-amd64.tar.gz
+#在master 节点下载后解压
+
+#查看版本
+/opt/kube/bin/kube-apiserver --version
+
+scp kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl 
+
+#先把这6个服务停了
+systemctl stop kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl 
+
+cd /root/upgrade_k8s/kubernetes/server/bin #进入到解压目录上，复制二进制文件并k8s目录上覆盖
+cp kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl /opt/kube/bin/
+
+#启动
+systemctl start kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl 
+
+
+#更新到deploy 服务器
+systemctl stop kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl 
+cd /root/upgrade_k8s/kubernetes/server/bin
+scp kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl root@192.168.25.229:/etc/kubeasz/bin/
+systemctl start kube-apiserver kube-controller-manager kube-scheduler kube-proxy kubelet kubectl 
+
+</code></pre>
+<h3 id="node">node</h3>
+<pre><code class="language-sh">#node 包
+https://dl.k8s.io/v1.26.1/kubernetes-node-linux-amd64.tar.gz
+
+#如果在生产环境需要先驱逐pods
+kubectl drain #命名比较暴力
+kubectl condon #禁调用
+kubectl uncordon 服务器IP 
+
+systemctl stop kube-proxy kubelet
+
+#进入到解压目录上，复制二进制文件并k8s目录上覆盖
+scp kube-proxy kubelet kubectl root@192.168.25.231:/opt/kube/bin/
+scp kube-proxy kubelet kubectl root@192.168.25.232:/opt/kube/bin/
+
+systemctl start kube-proxy kubelet
+</code></pre>
+<h2 id="升级containerd">升级containerd</h2>
+<p>升级从 1.6.8 升级到 1.6.9 版本</p>
+<pre><code class="language-sh">#下载
+wget https://github.com/containerd/containerd/releases/download/v1.6.9/containerd-1.6.9-linux-amd64.tar.gz
+
+先把进程给杀掉-才能传送代码
+kill -9 $(ps -ef|grep containerd-shim-runc-v2|gawk '$0 !~/grep/ {print $2}' |tr -s '\n' ' ')
+systemctl stop containerd
+
+在解压的目录下执行scp 并覆盖
+scp * root@192.168.25.232:/opt/kube/bin/
+scp * root@192.168.25.231:/opt/kube/bin/
+scp * root@192.168.25.230:/opt/kube/bin/
+
+systemctl start containerd
+
+重启服务器
+</code></pre>
+<h2 id="横向扩容-添加master">横向扩容 - 添加master</h2>
+<pre><code class="language-sh">#新的服务器先做配置
+#在新服务器执行
+ln -s /usr/bin/python3 /usr/bin/python
+
+#在deploy 执行
+ssh-copy-id 192.168.25.233
+
+#查看命令
+./ezctl --help
+
+#添加
+./ezctl add-master k8s-cluster1 192.168.25.233
+
+#删除
+./ezctl del-master k8s-cluster1 192.168.25.233
+</code></pre>
+<h2 id="横向扩容-添加node">横向扩容 -添加node</h2>
+<pre><code class="language-sh">#添加
+./ezctl add-node k8s-cluster1 192.168.25.233
+
+#删除
+./ezctl del-node k8s-cluster1 192.168.25.233
+</code></pre>
+<h2 id="2-etcd的备份和恢复-基于快照">2. etcd的备份和恢复-基于快照</h2>
+<pre><code class="language-sh">#etcd 常用命令 
+#查看etcd 有哪些服务器
+etcdctl --write-out=table member list
+
+#查看etcd leader
+etcdctl --write-out=table endpoint status
+
+#备份 -  cat /etc/kubeasz/playbooks/94.backup.yml
+#恢复 -  cat /etc/kubeasz/playbooks/95.restore.yml
+#恢复的操作 - cat /etc/kubeasz/roles/cluster-restore/task/main.yaml
+
+#基于kubeasz 做备份
+./ezctl backup k8s-cluster1
+#备份路径
+ll /etc/kubeasz/clusters/k8s-cluster1/backup
+
+
+#使用md5sum 确认 snapshot.db 和要恢复的版本是一直的
+root@ubtdeploy:/etc/kubeasz/clusters/k8s-cluster1/backup# md5sum snapshot.db
+b1855c78618bd1c5089a5cdd03ee4885  snapshot.db
+root@ubtdeploy:/etc/kubeasz/clusters/k8s-cluster1/backup# md5sum snapshot_202302221042.db
+b1855c78618bd1c5089a5cdd03ee4885  snapshot_202302221042.db
+
+#如果不一直可以强制覆盖-复制覆盖再恢复
+cp -rf snapshot_202302221107.db snapshot.db
+
+#再执行etcd恢复
+./ezctl restore k8s-cluster1
+</code></pre>
+<h2 id="3-整理coredns的域名解析流程和corefile配置">3. 整理coredns的域名解析流程和Corefile配置</h2>
+<p>1.容器nginx需要访问百度，ping一下百度域名baidu.com。<br>
+2.该请求会先被kube-dns(Coredns服务)捕获。<br>
+3.域名解析转发到coredns集群，根据负载均衡会分配到某个coredns pod。<br>
+4.coredns pod再通过api-server转到k8s集群服务。<br>
+5.最后k8s集群从etcd数据库中获取到域名解析结果。<br>
+6.etcd把结果原路返回到k8s，依次类推，Nginx获取到baidu对应的IP地址。<br>
+7.解析结果会保存到域名缓存，下次访问会更加快速。</p>
+<h3 id="corefile配置">Corefile配置</h3>
+<p>https://github.com/coredns/deployment/blob/master/kubernetes/coredns.yaml.sed</p>
+<pre><code class="language-sh">#修改 CLUSTER_DOMAIN - 第62行 
+kubernetes magedu.local in-addr.arpa ip6.arpa {
+
+#指定互联网服务器，最大可连接数可扩张 - 第67行
+forward . 8.8.8.8 {
+  max_concurent 2000
+} 
+
+#修改 cluster IP - 第191行
+clusterIP: CLUSTER_DNS_IP
+</code></pre>
+<h2 id="4dashboard的使用">4.dashboard的使用</h2>
+<p>参考： https://jimmysong.io/kubernetes-handbook/guide/auth-with-kubeconfig-or-token.html</p>
+<pre><code class="language-sh">#在官网获取的命令
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+
+#创建SA
+$ kubectl create serviceaccount dashboard-admin -n kubernetes-dashboard
+
+
+$ kubectl create clusterrolebinding dashboard-cluster-admin --clusterrole=cluster-admin --serviceaccount=kubernetes-dashboard:dashboard-admin
+
+#确认secret ，然后获取token
+kubectl get secret -A
+kubectl -n kube-system describe secret admin-user
+</code></pre>
+
+              </div>
+              <div class="toc-container">
+                <ul class="markdownIt-TOC">
+<li>
+<ul>
+<li><a href="#1kubernetes%E9%AB%98%E5%8F%AF%E7%94%A8%E9%9B%86%E7%BE%A4%E4%BA%8C%E8%BF%9B%E5%88%B6%E9%83%A8%E7%BD%B2">1.kubernetes高可用集群二进制部署</a></li>
+<li><a href="#%E5%8D%87%E7%BA%A7kubernetes">升级kubernetes</a>
+<ul>
+<li><a href="#server">server</a></li>
+<li><a href="#node">node</a></li>
+</ul>
+</li>
+<li><a href="#%E5%8D%87%E7%BA%A7containerd">升级containerd</a></li>
+<li><a href="#%E6%A8%AA%E5%90%91%E6%89%A9%E5%AE%B9-%E6%B7%BB%E5%8A%A0master">横向扩容 - 添加master</a></li>
+<li><a href="#%E6%A8%AA%E5%90%91%E6%89%A9%E5%AE%B9-%E6%B7%BB%E5%8A%A0node">横向扩容 -添加node</a></li>
+<li><a href="#2-etcd%E7%9A%84%E5%A4%87%E4%BB%BD%E5%92%8C%E6%81%A2%E5%A4%8D-%E5%9F%BA%E4%BA%8E%E5%BF%AB%E7%85%A7">2. etcd的备份和恢复-基于快照</a></li>
+<li><a href="#3-%E6%95%B4%E7%90%86coredns%E7%9A%84%E5%9F%9F%E5%90%8D%E8%A7%A3%E6%9E%90%E6%B5%81%E7%A8%8B%E5%92%8Ccorefile%E9%85%8D%E7%BD%AE">3. 整理coredns的域名解析流程和Corefile配置</a>
+<ul>
+<li><a href="#corefile%E9%85%8D%E7%BD%AE">Corefile配置</a></li>
+</ul>
+</li>
+<li><a href="#4dashboard%E7%9A%84%E4%BD%BF%E7%94%A8">4.dashboard的使用</a></li>
+</ul>
+</li>
+</ul>
+
+              </div>
+            </div>
+          </article>
+        </div>
+
+        
+          <div class="next-post">
+            <div class="next">下一篇</div>
+            <a href="https://edison-lucky.github.io/post/san-k8s/">
+              <h3 class="post-title">
+                三 - K8S
+              </h3>
+            </a>
+          </div>
+        
+
+        
+
+        <div class="site-footer">
+  Powered by <a href="edison-lucky.github.io" target="_blank">Y73059</a>
+  <a class="rss" href="https://edison-lucky.github.io/atom.xml" target="_blank">
+    <i class="ri-rss-line"></i> RSS
+  </a>
+</div>
+
+      </div>
+    </div>
+
+    <script>
+      hljs.initHighlightingOnLoad()
+
+      let mainNavLinks = document.querySelectorAll(".markdownIt-TOC a");
+
+      // This should probably be throttled.
+      // Especially because it triggers during smooth scrolling.
+      // https://lodash.com/docs/4.17.10#throttle
+      // You could do like...
+      // window.addEventListener("scroll", () => {
+      //    _.throttle(doThatStuff, 100);
+      // });
+      // Only not doing it here to keep this Pen dependency-free.
+
+      window.addEventListener("scroll", event => {
+        let fromTop = window.scrollY;
+
+        mainNavLinks.forEach((link, index) => {
+          let section = document.getElementById(decodeURI(link.hash).substring(1));
+          let nextSection = null
+          if (mainNavLinks[index + 1]) {
+            nextSection = document.getElementById(decodeURI(mainNavLinks[index + 1].hash).substring(1));
+          }
+          if (section.offsetTop <= fromTop) {
+            if (nextSection) {
+              if (nextSection.offsetTop > fromTop) {
+                link.classList.add("current");
+              } else {
+                link.classList.remove("current");    
+              }
+            } else {
+              link.classList.add("current");
+            }
+          } else {
+            link.classList.remove("current");
+          }
+        });
+      });
+
+    </script>
+  </body>
+</html>
